@@ -6,4 +6,4 @@
 
 | 插件 | 用途 | 当前状态 |
 | --- | --- | --- |
-| [dsh-chat-groups](./dsh-chat-groups/README.md) | 在工作区内按任务整理会话，可加入、移出或切换分组。 | 交互原型，尚不可作为 DSH Bundle 安装。 |
+| [dsh-chat-groups](./dsh-chat-groups/README.md) | 在工作区内按任务整理会话，可加入、移出或切换分组。 | 可作为 DSH Bundle 安装，已在 Web 0.2.2-rc.5 验证。 |

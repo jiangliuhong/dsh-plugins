@@ -1,6 +1,47 @@
 {
   "name": "dsh-chat-groups",
-  "version": "0.0.0",
-  "private": true,
-  "description": "dsh-chat-groups：在 DSH 工作区内按任务整理会话的交互原型"
+  "version": "0.1.1",
+  "type": "module",
+  "description": "在 DSH 工作区内按任务整理会话",
+  "main": "./host.js",
+  "exports": {
+    ".": "./host.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "host.js",
+    "groups.js",
+    "client.js",
+    "cordis.patch.yml"
+  ],
+  "engines": {
+    "dsh": "0.2.2-rc.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/dsh-storage-domain": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-typert-protocol": "0.2.2-rc.5",
+    "zod": "^4.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-api-remote-access",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
 }
