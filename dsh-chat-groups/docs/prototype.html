@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>dsh-chat-groups · 会话分组</title>
+<style>
+*{box-sizing:border-box}[hidden]{display:none!important}body{margin:0;color:#202a38;font:15px/1.6 system-ui,sans-serif}.shell{display:grid;grid-template-columns:clamp(280px,29vw,370px) minmax(0,1fr);min-height:100dvh}aside{background:#eff2f7;padding:24px 14px;border-right:1px solid #d9dfe8}main{padding:clamp(20px,5vw,72px);max-width:880px;width:100%;margin:auto auto 0;align-self:start;margin-top:0}.brand{font-size:20px;font-weight:750;letter-spacing:-.04em}.brand small{font:600 11px monospace;letter-spacing:.08em}.bar,.row,footer{display:flex;align-items:center;gap:5px}.bar{margin:24px 0 10px;justify-content:space-between}.row{min-width:0;margin:2px 0}.row.current{background:#dce6fb;border-radius:7px}.row>button:first-child{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.branch{margin-left:15px;padding-left:6px;border-left:1px solid #ced6e1}button,input,select{font:inherit;color:inherit}button{background:transparent;border:0;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:left}button:hover{background:#dde5ef}:focus-visible{outline:2px solid #4369bc;outline-offset:1px}.muted,small{color:#58677b}small{font-size:12px}.mini{font-size:13px}.empty{font-size:13px;color:#627184;margin:4px 8px}.demo{margin-top:32px;padding-top:16px;border-top:1px solid #d9dfe8}.demo button{display:block;color:#365faa}.menu button{display:block;width:100%;padding:9px}.danger{color:#9c3540}h1{font-size:27px;margin:6px 0}h2{font-size:19px}dialog{max-width:min(92vw,440px);width:100%;padding:22px;border:1px solid #d9dfe8;border-radius:12px}dialog::backdrop{background:#17233955}label{display:grid;gap:5px}input,select{width:100%;padding:8px}footer{justify-content:flex-end;margin-top:16px}.primary{background:#365faa;color:white}.primary:hover{background:#284c8c}#status{color:#435d83}@media(max-width:620px){.shell{grid-template-columns:1fr}aside{padding:12px}main{padding:18px}}
+</style></head><body><div class="shell"><aside><div class="brand">deepseek <small>HARNESS</small></div><div class="bar"><strong id="mode"></strong><button id="back" class="mini" hidden>返回默认视图</button></div><nav id="tree" aria-label="工作区与会话"></nav></aside><main><small>dsh-chat-groups · 离线交互原型</small><p class="muted" id="location"></p><h1 id="heading" tabindex="-1"></h1><p id="excerpt"></p><section class="demo"><h2>试试会话分组</h2><p>从左侧工作区「⋯」切换视图，或点击示例直接跳转。会话行的「⋯」可以调整归属。</p><div id="examples"></div></section><p role="status" id="status"></p></main></div>
+<dialog id="modal" aria-labelledby="title"><form id="form"><h2 id="title"></h2><div id="fields"></div><footer><button type="button" id="cancel">取消</button><button class="primary" id="save">保存</button></footer></form></dialog>
+<script>
+const $=id=>document.getElementById(id);
+const esc=x=>String(x).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const spaces=[{id:1,name:'客户端'},{id:2,name:'组件库'}];
+const groups=[{id:3,w:1,name:'登录改版'},{id:7,w:1,name:'发布准备'},{id:8,w:2,name:'无障碍适配'}];
+const sessions=[{id:4,w:1,g:null,name:'梳理启动流程',body:'从入口开始，记录客户端启动时各模块的加载顺序。'},{id:5,w:1,g:3,name:'登录页回归测试',body:'回归清单：验证登录成功、密码错误和会话过期三条路径。'},{id:9,w:1,g:3,name:'确认交互方案'},{id:10,w:1,g:7,name:'编写升级说明',body:'发布说明需要列出本次改动和用户的升级步骤。'},{id:6,w:2,g:null,name:'整理按钮规范'},{id:12,w:2,g:8,name:'键盘焦点检查',body:'用 Tab 依次聚焦按钮，检查焦点指示是否可见。'}];
+const byId=(list,id)=>list.find(x=>x.id===id), members=g=>sessions.filter(s=>s.g===g.id);
+const folded=new Set(), nativeFolded=new Set();let grouped=false,current=4,origin=1,next=13,onSave;
+function button(act,id,label,attrs=''){return `<button type="button" data-act="${act}" data-id="${id}" ${attrs}>${esc(label)}</button>`}
+function more(act,x){return button(act,x.id,'⋯',`aria-label="${esc(x.name)}的操作"`)}
+function toggle(act,obj,set){const open=!set.has(obj.id);return button(act,obj.id,(open?'▾ ':'▸ ')+obj.name,`aria-expanded="${open}"`)}
+function sessionRow(s){return `<div class="row ${s.id===current?'current':''}">${button('open',s.id,s.name,s.id===current?'aria-current="true"':'')}${grouped?more('sessionMenu',s):''}</div>`}
+function groupRow(g){const list=members(g);return `<section><div class="row">${toggle('fold',g,folded)}${button('new',g.id,'＋ 会话','class="mini"')}${more('groupMenu',g)}</div>${folded.has(g.id)?'':`<div class="branch">${list.map(sessionRow).join('')||'<p class="empty">暂无会话</p>'}</div>`}</section>`}
+function spaceRow(w){const set=grouped?folded:nativeFolded;const rows=sessions.filter(s=>s.w===w.id&&(!grouped||s.g===null));return `<section><div class="row">${toggle('fold',w,set)}${grouped?button('create',w.id,'＋ 新增分组','class="mini"'):more('switchMenu',w)}</div>${set.has(w.id)?'':`<div class="branch">${rows.map(sessionRow).join('')}${grouped?groups.filter(g=>g.w===w.id).map(groupRow).join(''):''}</div>`}</section>`}
+function trail(s){return [byId(spaces,s.w).name,byId(groups,s.g)?.name].filter(Boolean).join(' › ')}
+function render(){const s=byId(sessions,current);$('mode').textContent=grouped?'会话分组':'工作区';$('back').hidden=!grouped;$('tree').innerHTML=spaces.map(spaceRow).join('');$('heading').textContent=s.name;$('excerpt').textContent=s.body||'这是「'+s.name+'」的模拟会话。';$('location').textContent=(grouped?trail(s):byId(spaces,s.w).name)+' · 模拟会话';$('examples').innerHTML=[5,10,12].map(id=>{const s=byId(sessions,id);return button('jump',id,trail(s)+' › '+s.name+' →')}).join('')}
+function focusRow(act,id){document.querySelector(`#tree [data-act="${act}"][data-id="${id}"]`)?.focus()}
+function dialog(title,html,save,fn){$('title').textContent=title;$('fields').innerHTML=html;$('save').hidden=!save;$('save').textContent=save||'';$('cancel').textContent=save?'取消':'关闭';onSave=fn;if(!$('modal').open)$('modal').showModal();$('fields').querySelector('input,select,button')?.focus()}
+function menu(title,items){dialog(title,`<div class="menu">${items}</div>`,null,null)}
+function finish(message,act,id){if($('modal').open)$('modal').close();render();$('status').textContent=message;focusRow(act,id)}
+function changeGroup(s,id){s.g=id;folded.delete(s.w);folded.delete(id);finish(id===null?'会话已移回工作区。':'会话已加入「'+byId(groups,id).name+'」。','open',s.id)}
+function chooseGroup(s){const choices=groups.filter(g=>g.w===s.w&&g.id!==s.g);if(!choices.length){dialog('暂无可选分组','<p>请先在当前工作区新增一个分组。</p>',null,null);return}dialog(s.g===null?'加入分组':'移动到其他分组',`<label>将「${esc(s.name)}」放到<select id="target">${choices.map(g=>`<option value="${g.id}">${esc(g.name)}</option>`).join('')}</select></label>`,'确定',()=>changeGroup(s,Number($('target').value)))}
+function editName(w,g){dialog(g?'重命名分组':'新增分组 · '+w.name,`<label>分组名称<input id="name" maxlength="80" required value="${esc(g?.name||'')}"></label>`,'保存',()=>{const input=$('name'),name=input.value.trim();if(!name){input.value='';input.reportValidity();return}const target=g||{id:next++,w:w.id};target.name=name;if(!g)groups.push(target);folded.delete(w.id);finish(g?'分组已重命名。':'分组已创建。','fold',target.id)})}
+$('back').onclick=()=>{grouped=false;finish('已返回默认视图。','switchMenu',origin)};$('cancel').onclick=()=>$('modal').close();$('form').onsubmit=e=>{e.preventDefault();onSave?.()};
+document.addEventListener('click',e=>{const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act,id=Number(b.dataset.id),s=byId(sessions,id),g=byId(groups,id),w=byId(spaces,id);switch(a){
+case 'switchMenu':menu(w.name,button('switch',id,'切换到会话分组视图'));break;
+case 'switch':grouped=true;origin=id;folded.delete(id);finish('已切换分组视图。','fold',id);break;
+case 'fold':{const set=grouped?folded:nativeFolded;set.has(id)?set.delete(id):set.add(id);render();focusRow('fold',id);break}
+case 'jump':grouped=true;origin=s.w;folded.delete(s.w);folded.delete(s.g); // 同时展开跳转目标
+case 'open':current=id;render();$('status').textContent='';$('heading').focus();break;
+case 'create':editName(w,null);break;
+case 'groupMenu':menu(g.name,button('rename',id,'重命名分组')+button('delete',id,'删除分组','class="danger"'));break;
+case 'rename':editName(byId(spaces,g.w),g);break;
+case 'delete':dialog('删除「'+g.name+'」？',`<p>组内 ${members(g).length} 条会话将移回「${esc(byId(spaces,g.w).name)}」，不会删除会话。</p>`,'仅删除分组',()=>{members(g).forEach(s=>s.g=null);groups.splice(groups.indexOf(g),1);folded.delete(g.id);finish('分组已删除，会话已保留。','fold',g.w)});break;
+case 'new':{const n={id:next++,w:g.w,g:id,name:'新会话 · '+g.name};sessions.push(n);folded.delete(id);current=n.id;finish('已在组内创建模拟会话。','open',n.id);break}
+case 'sessionMenu':menu(s.name,button('choose',id,s.g===null?'加入分组…':'移动到其他分组…')+(s.g!==null?button('remove',id,'移出分组，返回工作区'):''));break;
+case 'choose':chooseGroup(s);break;
+case 'remove':changeGroup(s,null);break;
+}});render();
+</script></body></html>
