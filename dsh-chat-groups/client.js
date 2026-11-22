@@ -46,6 +46,12 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-row > .dsh-chat-groups-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
       .dsh-chat-groups-label > svg { flex: none; }
       .dsh-chat-groups-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dsh-chat-groups-status-dot { box-sizing: border-box; flex: none; width: 8px; height: 8px; border-radius: 50%; }
+      .dsh-chat-groups-status-dot[data-state=warning] {
+        border-radius: 2px; background: var(--dsw-alias-state-warn-primary); transform: rotate(45deg) scale(.8);
+      }
+      .dsh-chat-groups-status-dot[data-state=ongoing] { border: 2px solid var(--dsw-alias-state-business-primary); }
+      .dsh-chat-groups-status-dot[data-state=done] { background: var(--dsw-alias-state-done-primary); }
       .dsh-chat-groups-actions { flex: none; display: flex; align-items: center; gap: 5px; padding-inline-end: 3px; }
       .dsh-chat-groups-icon { flex: none; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; padding: 0; color: var(--dsw-alias-label-tertiary); }
       .dsh-chat-groups-icon svg { width: 14px; height: 14px; }
@@ -68,6 +74,29 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-error { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
       .dsh-chat-groups-danger:not(:disabled) { color: var(--dsw-alias-state-error-primary); }
     `
+
+    const pendingStatusLabel = new Map([
+      ['approval', 'status.waitingApproval'],
+      ['plan-review', 'status.planReview'],
+      ['question', 'status.waitingAnswer'],
+    ])
+
+    function sessionRowStatus(session, catalog, statuses, t) {
+      if (session.blank) return undefined
+      const status = statuses.get(session.id)
+      const pending = pendingStatusLabel.get(status?.pendingInteraction?.kind)
+      if (pending !== undefined) return { state: 'warning', label: t(pending) }
+      if (status?.running ?? session.running) return { state: 'ongoing', label: t('status.running') }
+
+      const children = catalog.projectionsBySession[session.id]?.values.subagentCatalog ?? []
+      const runningChildren = children.filter(({ id }) => statuses.get(id)?.running ?? catalog.byId[id]?.running).length
+      if (runningChildren > 0) {
+        const key = runningChildren === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other'
+        return { state: 'ongoing', label: t(key, { n: runningChildren }) }
+      }
+      if (status?.completionUnread) return { state: 'done', label: t('status.completed') }
+      return undefined
+    }
 
     function useSource(source) {
       return useSyncExternalStore(
@@ -209,10 +238,11 @@ window.__ModuleLoader__.load({
 
       function GroupedSidebar({
         wide, expandSidebar, useSectionScroller, useContextMenu, useSessionAccess, useWorkspaceAccess,
-        renderFactorySlot, t,
+        renderFactorySlot, useSessionStatus, t,
       }) {
         const workspaceList = useSource(workspaces.list)
         const catalog = useSource(sessions.list)
+        const statuses = useSessionStatus(snapshot => snapshot)
         const generation = useSource(connection.generation)
         const workspaceAction = useSource(nativeWorkspace.hooks.workspaceActionRequest)
         const { bindScrollerRef } = useSectionScroller()
@@ -417,11 +447,14 @@ window.__ModuleLoader__.load({
             setStatus('会话当前不可打开。')
             return
           }
+          // DSH clears completionUnread when the session enters the main view.
           uiWorkspace.openSession(id)
         }
 
         function sessionRow(workspaceId, session, groupId, groups) {
           const displayTitle = sessionLabel(session)
+          const status = sessionRowStatus(session, catalog, statuses, t)
+          const titleWithStatus = status ? `${displayTitle} · ${status.label}` : displayTitle
           const target = session.blank ? undefined : {
             kind: 'session', value: { sessionId: session.id, displayTitle: session.title?.trim() ?? '' },
           }
@@ -429,7 +462,12 @@ window.__ModuleLoader__.load({
             key: session.id, className: 'dsh-chat-groups-row', 'data-session-id': session.id,
             'aria-current': session.id === active ? 'true' : undefined, ...getTriggerProps(target),
           },
-          button(h('span', null, displayTitle), () => openSession(session.id), { title: displayTitle }),
+          button(h(Fragment, null,
+            h('span', {
+              className: 'dsh-chat-groups-status-dot', 'data-state': status?.state, 'aria-hidden': true,
+            }),
+            h('span', null, displayTitle),
+          ), () => openSession(session.id), { title: titleWithStatus, 'aria-label': titleWithStatus }),
           h('span', { className: 'dsh-chat-groups-actions' },
             target && h('span', { className: 'dsh-chat-groups-native-actions' },
               renderFactorySlot('contextMenu.button', {
