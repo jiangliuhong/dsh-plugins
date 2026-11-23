@@ -170,18 +170,18 @@ window.__ModuleLoader__.load({
       { id: 'delete', label: '删除分组', icon: h(IconTrashOutlineRegular, { size: 14 }), danger: true },
     ]
 
-    function GroupActionPanel({ id, anchorName, trigger, action, groupName, description, pending, close, save, error, t }) {
+    function GroupActionPanel({ id, anchorName, trigger, action, groupName = '', description, pending, close, save, error, t }) {
       const [name, setName] = useState(groupName)
       const surface = useRef(null)
       const focusTarget = useRef(null)
-      const rename = action === 'rename'
-      const title = rename ? '重命名分组' : `删除「${groupName}」？`
-      const blocked = pending || (rename && (!name.trim() || name.trim() === groupName))
+      const editsName = action !== 'delete'
+      const title = { create: '新增分组', rename: '重命名分组', delete: `删除「${groupName}」？` }[action]
+      const blocked = pending || (editsName && (!name.trim() || name.trim() === groupName))
       useDismissOnOutsidePointer(trigger, true, () => close(false), surface)
       useLayoutEffect(() => {
         focusTarget.current.focus({ preventScroll: true })
-        if (rename) focusTarget.current.select()
-      }, [rename])
+        if (editsName) focusTarget.current.select()
+      }, [editsName])
       return createPortal(h(MenuSurface, {
         ref: surface, id, role: 'dialog', 'aria-label': title,
         className: 'dsh-chat-groups-popover', style: { positionAnchor: anchorName },
@@ -199,7 +199,7 @@ window.__ModuleLoader__.load({
         },
       },
       h('strong', null, title),
-      rename ? h('input', {
+      editsName ? h('input', {
         ref: focusTarget, className: 'dsh-chat-groups-field', 'aria-label': '分组名称',
         value: name, readOnly: pending, maxLength: 80, onChange: event => setName(event.target.value),
         onKeyDown(event) {
@@ -208,15 +208,15 @@ window.__ModuleLoader__.load({
       }) : h('p', null, description),
       error && h('div', { className: 'dsh-chat-groups-error', role: 'alert' }, error),
       h('div', { className: 'dsh-chat-groups-popover-footer' },
-        h(Button, { ref: rename ? undefined : focusTarget, type: 'button', size: 'sm', variant: 'outline',
+        h(Button, { ref: editsName ? undefined : focusTarget, type: 'button', size: 'sm', variant: 'outline',
           disabled: pending, onClick: () => close() }, t('cancel')),
-        h(Button, { type: 'submit', size: 'sm', variant: rename ? 'primary' : 'outline', disabled: blocked,
-          className: rename ? undefined : 'dsh-chat-groups-danger',
-        }, rename ? '保存' : '仅删除分组')),
+        h(Button, { type: 'submit', size: 'sm', variant: editsName ? 'primary' : 'outline', disabled: blocked,
+          className: editsName ? undefined : 'dsh-chat-groups-danger',
+        }, editsName ? '保存' : '仅删除分组')),
       )), document.body)
     }
 
-    function GroupActions({ groupName, description, disabled, run, save, t }) {
+    function GroupActions({ groupName, description, createLabel, disabled, run, save, t }) {
       const [action, setAction] = useState(null)
       const [error, setError] = useState('')
       const trigger = useRef(null)
@@ -227,14 +227,19 @@ window.__ModuleLoader__.load({
         setAction(null)
       }
       const close = (restoreFocus) => { if (!disabled) dismiss(restoreFocus) }
+      function open(next) {
+        setError('')
+        setAction(next)
+      }
       return h(Fragment, null,
-        h(ActionMenu, {
+        createLabel ? iconButton(IconProjectAddOutlineRegular, createLabel,
+          () => action ? close() : open('create'), disabled && !action, {
+            ref: trigger, style: { anchorName }, 'aria-haspopup': 'dialog',
+            'aria-expanded': !!action, 'aria-controls': action ? id : undefined,
+          }) : h(ActionMenu, {
           Icon: IconEllipsisOutlineRegular, label: `${groupName}的操作`, disabled, items: groupActions,
           triggerRef: trigger, anchorName, panel: action && { id, close },
-          onSelect(next) {
-            setError('')
-            setAction(next)
-          },
+          onSelect: open,
         }),
         action && h(GroupActionPanel, {
           id, anchorName, trigger, action, groupName, description, pending: disabled, close, error, t,
@@ -375,7 +380,6 @@ window.__ModuleLoader__.load({
             .map(workspace => workspace.workspaceId),
         ))
         const [collapsedGroups, setCollapsedGroups] = useState(() => new Set())
-        const [groupDialog, setDialog] = useState(null)
         const [dialogError, setDialogError] = useState('')
         const [status, setStatus] = useState('')
         const [pending, setPending] = useState(false)
@@ -423,16 +427,11 @@ window.__ModuleLoader__.load({
           if (!groupsByWorkspace.has(workspaceId)) groupsByWorkspace.set(workspaceId, [])
           groupsByWorkspace.get(workspaceId).push(entry)
         }
-        const openDialog = next => {
-          setDialogError('')
-          setDialog(next)
-        }
         const workspaceLabel = title => title === 'default-workspace' ? t('workspace.defaultName') : title
         const sessionLabel = session => session.blank ? t('session.new') : (session.title?.trim() || t('session.untitled'))
-        const dialog = workspaceAction === null ? groupDialog : workspaceActionDialog()
+        const dialog = workspaceAction === null ? null : workspaceActionDialog()
         function closeDialog() {
-          if (workspaceAction === null) setDialog(null)
-          else nativeWorkspace.settleWorkspaceAction()
+          nativeWorkspace.settleWorkspaceAction()
           setDialogError('')
         }
 
@@ -493,14 +492,9 @@ window.__ModuleLoader__.load({
           return change({ action: 'assign', workspaceId, sessionId, groupId }, signal)
         }
 
-        function showCreateGroup(workspace) {
-          openDialog({
-            key: workspace.workspaceId,
-            title: `新增分组 · ${workspaceLabel(workspace.title)}`,
-            input: { value: '', maxLength: 80 },
-            submit: '保存',
-            save: (name, signal) => change({ action: 'create', workspaceId: workspace.workspaceId, name }, signal),
-          })
+        async function createGroup(workspaceId, name, signal) {
+          await change({ action: 'create', workspaceId, name }, signal)
+          if (!signal.aborted) viewFold(setCollapsedWorkspaces, workspaceId, true)
         }
 
         async function saveGroup(workspaceId, groupId, action, name, signal) {
@@ -610,6 +604,16 @@ window.__ModuleLoader__.load({
             if (!members.has(groupId)) members.set(groupId, [])
             members.get(groupId).push(session)
           }
+          const rowsByRecency = [
+            ...(members.get(undefined) ?? []).map(session => ({ session, updatedAt: session.updatedAt })),
+            ...groups.map(([groupId, group]) => {
+              const rows = members.get(groupId) ?? []
+              const updatedAt = rows.length
+                ? rows.reduce((latest, session) => Math.max(latest, session.updatedAt), 0)
+                : group.createdAt ?? 0
+              return { groupId, group, rows, updatedAt }
+            }),
+          ].sort((left, right) => right.updatedAt - left.updatedAt)
           const expanded = !collapsedWorkspaces.has(id)
           const title = workspaceLabel(workspace.title)
           const target = { kind: 'workspace', value: { workspaceId: id, path: workspace.path, displayTitle: title } }
@@ -621,14 +625,15 @@ window.__ModuleLoader__.load({
               () => viewFold(setCollapsedWorkspaces, id), { 'aria-expanded': expanded, title }),
               h('span', { className: 'dsh-chat-groups-actions' },
                 h(NativeWorkspaceActions, { target, renderFactorySlot, useWorkspaceAccess, t }),
-                iconButton(IconProjectAddOutlineRegular, `在「${title}」中新增分组`,
-                  () => showCreateGroup(workspace), pending || data === null),
+                h(GroupActions, {
+                  createLabel: `在「${title}」中新增分组`, disabled: pending || data === null, run, t,
+                  save: (_action, name, signal) => createGroup(id, name, signal),
+                }),
               ),
             ),
             expanded && h('div', { className: 'dsh-chat-groups-branch' },
-              members.get(undefined)?.map(session => sessionRow(id, session, undefined, groups)),
-              groups.map(([groupId, group]) => {
-                const rows = members.get(groupId) ?? []
+              rowsByRecency.map(({ session, groupId, group, rows }) => {
+                if (session) return sessionRow(id, session, undefined, groups)
                 const open = !collapsedGroups.has(groupId)
                 const retrySessionId = data.pendingSessions[groupId]
                 return h('section', { key: groupId },

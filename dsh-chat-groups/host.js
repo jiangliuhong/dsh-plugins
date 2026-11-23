@@ -7,7 +7,11 @@ import { createGroupOperations, emptyGroups, GroupError } from './groups.js'
 const id = z.string().min(1).max(256)
 const nameSchema = z.string().trim().min(1).max(80)
 const stateSchema = z.object({
-  groups: z.record(z.uuid(), z.object({ workspaceId: id, name: nameSchema })),
+  groups: z.record(z.uuid(), z.object({
+    workspaceId: id,
+    name: nameSchema,
+    createdAt: z.number().int().nonnegative().optional(),
+  })),
   membership: z.record(id, z.uuid()),
   pendingSessions: z.record(z.uuid(), id).default({}),
 })

@@ -167,10 +167,16 @@ test('reject a pending session retry in another workspace or after archive', asy
 })
 
 test('create adds a group to its workspace while preserving existing groups and sessions', async () => {
-  const { operations } = fixture()
+  const { operations, reopen } = fixture()
+  const before = Date.now()
   const result = await operations.change({ action: 'create', workspaceId: 'two', name: 'New group' })
-  const added = Object.entries(result.groups).find(([key]) => !['a', 'b', 'c'].includes(key))
-  assert.match(added[0], /^[0-9a-f-]{36}$/)
-  assert.deepEqual(added[1], { workspaceId: 'two', name: 'New group' })
+  const [groupId, group] = Object.entries(result.groups).find(([key]) => !['a', 'b', 'c'].includes(key))
+  assert.match(groupId, /^[0-9a-f-]{36}$/)
+  assert.equal(group.workspaceId, 'two')
+  assert.equal(group.name, 'New group')
+  assert.ok(group.createdAt >= before && group.createdAt <= Date.now())
   assert.deepEqual(result.membership, { first: 'a', second: 'b' })
+
+  await operations.change({ action: 'rename', workspaceId: 'two', groupId, name: 'Renamed' })
+  assert.deepEqual(reopen().snapshot().groups[groupId], { ...group, name: 'Renamed' })
 })

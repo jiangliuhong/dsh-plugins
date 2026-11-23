@@ -22,16 +22,17 @@ function requireGroup(state, workspaceId, groupId) {
 function updateGroups(state, request) {
   const { action, workspaceId, groupId } = request
   if (action === 'create') {
+    const group = { workspaceId, name: request.name, createdAt: Date.now() }
     return {
       ...state,
-      groups: { ...state.groups, [randomUUID()]: { workspaceId, name: request.name } },
+      groups: { ...state.groups, [randomUUID()]: group },
     }
   }
   if (groupId !== null) requireGroup(state, workspaceId, groupId)
   if (action === 'rename') {
     return {
       ...state,
-      groups: { ...state.groups, [groupId]: { workspaceId, name: request.name } },
+      groups: { ...state.groups, [groupId]: { ...state.groups[groupId], name: request.name } },
     }
   }
   if (action === 'delete') {
