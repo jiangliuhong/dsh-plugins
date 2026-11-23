@@ -1,8 +1,13 @@
 {
   "name": "dsh-chat-groups",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "type": "module",
   "description": "在 DSH 工作区内按任务整理会话",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jiangliuhong/dsh-plugins.git",
+    "directory": "dsh-chat-groups"
+  },
   "main": "./host.js",
   "exports": {
     ".": "./host.js",

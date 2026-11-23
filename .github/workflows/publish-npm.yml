@@ -1,0 +1,63 @@
+name: Publish npm plugin
+
+on:
+  push:
+    tags:
+      - '*-v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
+      - name: Validate plugin and release tag
+        id: release
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs'
+          import { join } from 'node:path'
+
+          const tag = process.env.GITHUB_REF_NAME
+          const release = /^(?<plugin>[a-z0-9]+(?:-[a-z0-9]+)*)-v(?<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(tag)
+          if (!release) throw new Error('Expected a release tag of the form <plugin>-v<major>.<minor>.<patch>')
+
+          const { plugin, version } = release.groups
+          const plugins = JSON.parse(readFileSync('.github/npm-plugins.json', 'utf8'))
+          if (!Object.hasOwn(plugins, plugin)) throw new Error('Plugin is not registered for npm publishing: ' + plugin)
+
+          const { directory, npmName, distTag } = plugins[plugin]
+          const pkg = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
+          if (pkg.name !== npmName) throw new Error('Expected npm package ' + npmName + ', found ' + pkg.name)
+          if (pkg.version !== version) throw new Error('Tag version ' + version + ' does not match package version ' + pkg.version)
+
+          appendFileSync(process.env.GITHUB_OUTPUT, 'directory=' + directory + '\ndist-tag=' + distTag + '\n')
+          NODE
+
+      - name: Test plugin
+        working-directory: ${{ steps.release.outputs.directory }}
+        run: npm test
+
+      - name: Pack plugin
+        id: pack
+        working-directory: ${{ steps.release.outputs.directory }}
+        run: |
+          filename=$(npm pack --pack-destination "$RUNNER_TEMP")
+          printf 'tarball=%s/%s\n' "$RUNNER_TEMP" "$filename" >> "$GITHUB_OUTPUT"
+
+      - name: Publish tarball to npm
+        working-directory: ${{ steps.release.outputs.directory }}
+        env:
+          PACKAGE_TARBALL: ${{ steps.pack.outputs.tarball }}
+          NPM_DIST_TAG: ${{ steps.release.outputs.dist-tag }}
+        run: npm publish "$PACKAGE_TARBALL" --tag "$NPM_DIST_TAG"
