@@ -2,10 +2,13 @@
 window.__ModuleLoader__.load({
   id: 'dsh-chat-groups',
   factory(require) {
-    const { createElement: h, Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } = require('react')
+    const {
+      createElement: h, Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore,
+    } = require('react')
     const { createPortal } = require('react-dom')
     const {
-      Button, Modal, Tooltip, IconEllipsisOutlineRegular, IconFlatListOutlineRegular,
+      Button, Menu, MenuSurface, Modal, Tooltip, useDismissOnOutsidePointer,
+      IconEditOutlineRegular, IconEllipsisOutlineRegular, IconFlatListOutlineRegular, IconTrashOutlineRegular,
       IconFolderCloseRegular, IconFolderOpenRegular,
       IconNewChatOutlineRegular, IconProjectAddOutlineRegular, IconWorkspaceTreeOutlineRegular,
     } = require('@deepseek-ai/dsh-client-ui-primitives')
@@ -60,7 +63,7 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-note { margin: 3px 8px; opacity: .8; overflow-wrap: anywhere; }
       @media (hover: hover) {
         .dsh-chat-groups-row > .dsh-chat-groups-actions { display: none; }
-        .dsh-chat-groups-row:is(:hover, :has(button[aria-haspopup=menu][aria-expanded=true])) > .dsh-chat-groups-actions,
+        .dsh-chat-groups-row:is(:hover, :has(button[aria-haspopup][aria-expanded=true])) > .dsh-chat-groups-actions,
         html[data-input-modality='keyboard'] .dsh-chat-groups-row:focus-within > .dsh-chat-groups-actions { display: flex; }
       }
       .dsh-chat-groups-field {
@@ -70,7 +73,27 @@ window.__ModuleLoader__.load({
         font-size: 14px; line-height: 22px;
       }
       .dsh-chat-groups-field:focus { outline: 1px solid var(--dsw-focus-ring-color, currentColor); }
-      .dsh-chat-groups-menu { display: grid; gap: 8px; }
+      .dsh-chat-groups-popover {
+        position: fixed; inset: calc(anchor(bottom) + 4px) 8px 8px max(8px, anchor(left));
+        position-try-fallbacks: --dsh-chat-groups-above, --dsh-chat-groups-end, --dsh-chat-groups-above-end;
+        align-self: start; justify-self: start; z-index: 1100;
+        box-sizing: border-box; width: min(280px, calc(100vw - 16px)); max-height: calc(100dvh - 16px);
+        overflow: auto; padding: 12px;
+      }
+      @position-try --dsh-chat-groups-above {
+        top: 8px; bottom: calc(anchor(top) + 4px); align-self: end;
+      }
+      @position-try --dsh-chat-groups-end {
+        left: 8px; right: max(8px, anchor(right)); justify-self: end;
+      }
+      @position-try --dsh-chat-groups-above-end {
+        top: 8px; bottom: calc(anchor(top) + 4px); align-self: end;
+        left: 8px; right: max(8px, anchor(right)); justify-self: end;
+      }
+      .dsh-chat-groups-popover form { display: grid; gap: 10px; font-size: 13px; overflow-wrap: anywhere; }
+      .dsh-chat-groups-popover form p { margin: 0; }
+      .dsh-chat-groups-popover .dsh-chat-groups-field { height: 32px; padding: 4px 8px; font-size: inherit; }
+      .dsh-chat-groups-popover-footer { display: flex; justify-content: flex-end; gap: 6px; }
       .dsh-chat-groups-error { margin-top: 8px; font-size: 12px; color: var(--dsw-alias-state-error-primary); }
       .dsh-chat-groups-danger:not(:disabled) { color: var(--dsw-alias-state-error-primary); }
     `
@@ -111,11 +134,113 @@ window.__ModuleLoader__.load({
       type: 'button', className: 'dsh-chat-groups-label', onClick, ...attributes,
     }, label)
 
-    function iconButton(Icon, label, onClick, disabled) {
-      return h(Tooltip, { label, side: 'bottom', align: 'end', delayMs: 500, portal: true },
+    function iconButton(Icon, label, onClick, disabled, attributes = {}) {
+      return h(Tooltip, { label, side: 'bottom', align: 'end', delayMs: 500, portal: true, disabled: attributes['aria-expanded'] },
         h('button', {
-          type: 'button', className: 'dsh-chat-groups-icon', 'aria-label': label, onClick, disabled,
+          type: 'button', className: 'dsh-chat-groups-icon', 'aria-label': label, onClick, disabled, ...attributes,
         }, h(Icon, { size: 14, 'aria-hidden': true })))
+    }
+
+    function ActionMenu({ Icon, label, disabled, items, onSelect, panel, triggerRef, anchorName }) {
+      const [open, setOpen] = useState(false)
+      return h(Menu, {
+        open, items, portal: true, autoFocus: true, contextual: true,
+        onClose: () => setOpen(false),
+        onSelect(id) {
+          setOpen(false)
+          onSelect(id)
+        },
+        anchor: iconButton(Icon, label, event => {
+          event.stopPropagation()
+          event.currentTarget.focus({ preventScroll: true })
+          if (panel) panel.close()
+          else setOpen(!open)
+        }, disabled && !panel, {
+          ref: triggerRef,
+          style: anchorName ? { anchorName } : undefined,
+          'aria-haspopup': panel ? 'dialog' : 'menu',
+          'aria-expanded': open || !!panel,
+          'aria-controls': panel?.id,
+        }),
+      })
+    }
+
+    const groupActions = [
+      { id: 'rename', label: '重命名分组', icon: h(IconEditOutlineRegular, { size: 14 }) },
+      { id: 'delete', label: '删除分组', icon: h(IconTrashOutlineRegular, { size: 14 }), danger: true },
+    ]
+
+    function GroupActionPanel({ id, anchorName, trigger, action, groupName, description, pending, close, save, error, t }) {
+      const [name, setName] = useState(groupName)
+      const surface = useRef(null)
+      const focusTarget = useRef(null)
+      const rename = action === 'rename'
+      const title = rename ? '重命名分组' : `删除「${groupName}」？`
+      const blocked = pending || (rename && (!name.trim() || name.trim() === groupName))
+      useDismissOnOutsidePointer(trigger, true, () => close(false), surface)
+      useLayoutEffect(() => {
+        focusTarget.current.focus({ preventScroll: true })
+        if (rename) focusTarget.current.select()
+      }, [rename])
+      return createPortal(h(MenuSurface, {
+        ref: surface, id, role: 'dialog', 'aria-label': title,
+        className: 'dsh-chat-groups-popover', style: { positionAnchor: anchorName },
+        onKeyDown(event) {
+          if (event.key === 'Escape' && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+            event.preventDefault()
+            event.stopPropagation()
+            close()
+          }
+        },
+      }, h('form', {
+        onSubmit(event) {
+          event.preventDefault()
+          if (!blocked) save(name.trim())
+        },
+      },
+      h('strong', null, title),
+      rename ? h('input', {
+        ref: focusTarget, className: 'dsh-chat-groups-field', 'aria-label': '分组名称',
+        value: name, readOnly: pending, maxLength: 80, onChange: event => setName(event.target.value),
+        onKeyDown(event) {
+          if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault()
+        },
+      }) : h('p', null, description),
+      error && h('div', { className: 'dsh-chat-groups-error', role: 'alert' }, error),
+      h('div', { className: 'dsh-chat-groups-popover-footer' },
+        h(Button, { ref: rename ? undefined : focusTarget, type: 'button', size: 'sm', variant: 'outline',
+          disabled: pending, onClick: () => close() }, t('cancel')),
+        h(Button, { type: 'submit', size: 'sm', variant: rename ? 'primary' : 'outline', disabled: blocked,
+          className: rename ? undefined : 'dsh-chat-groups-danger',
+        }, rename ? '保存' : '仅删除分组')),
+      )), document.body)
+    }
+
+    function GroupActions({ groupName, description, disabled, run, save, t }) {
+      const [action, setAction] = useState(null)
+      const [error, setError] = useState('')
+      const trigger = useRef(null)
+      const id = useId()
+      const anchorName = `--dsh-chat-groups-${id.replace(/[^a-zA-Z0-9_-]/g, '')}`
+      function dismiss(restoreFocus = true) {
+        if (restoreFocus) trigger.current?.focus({ preventScroll: true })
+        setAction(null)
+      }
+      const close = (restoreFocus) => { if (!disabled) dismiss(restoreFocus) }
+      return h(Fragment, null,
+        h(ActionMenu, {
+          Icon: IconEllipsisOutlineRegular, label: `${groupName}的操作`, disabled, items: groupActions,
+          triggerRef: trigger, anchorName, panel: action && { id, close },
+          onSelect(next) {
+            setError('')
+            setAction(next)
+          },
+        }),
+        action && h(GroupActionPanel, {
+          id, anchorName, trigger, action, groupName, description, pending: disabled, close, error, t,
+          save: name => { void run(signal => save(action, name, signal), { close: dismiss, onError: setError }) },
+        }),
+      )
     }
 
     function RetryIcon() {
@@ -126,7 +251,7 @@ window.__ModuleLoader__.load({
     }
 
     function Dialog({ dialog, pending, error, close, submit, t }) {
-      const [value, setValue] = useState(dialog.input?.value ?? dialog.choices?.[0]?.[0] ?? '')
+      const [value, setValue] = useState(dialog.input?.value ?? '')
       const blocked = pending || (dialog.input && (!value.trim() || dialog.input.blocked?.(value.trim())))
       const field = {
         className: 'dsh-chat-groups-field', 'data-modal-autofocus': true, value, disabled: pending,
@@ -155,10 +280,6 @@ window.__ModuleLoader__.load({
           }
         },
       }),
-      dialog.choices && h('select', { ...field, 'aria-label': '选择分组' },
-        dialog.choices.map(([id, name]) => h('option', { key: id, value: id }, name))),
-      dialog.actions && h('div', { className: 'dsh-chat-groups-menu' },
-        dialog.actions.map(([label, run]) => h(Button, { key: label, variant: 'outline', onClick: run }, label))),
       error && h('div', { className: 'dsh-chat-groups-error', role: 'alert' }, error))
     }
 
@@ -344,19 +465,19 @@ window.__ModuleLoader__.load({
           })
         }
 
-        async function run(action, fromDialog = false) {
+        async function run(action, { close, onError = setStatus } = {}) {
           if (operation.current) return
           const { signal } = lifetime.current
           operation.current = true
           revision.current += 1
           setPending(true)
           setStatus('')
-          setDialogError('')
+          onError('')
           try {
             await action(signal)
-            if (!signal.aborted && fromDialog) closeDialog()
+            if (!signal.aborted) close?.()
           } catch (error) {
-            if (!signal.aborted) (fromDialog ? setDialogError : setStatus)(message(error))
+            if (!signal.aborted) onError(message(error))
           } finally {
             operation.current = false
             if (!signal.aborted) setPending(false)
@@ -372,48 +493,23 @@ window.__ModuleLoader__.load({
           return change({ action: 'assign', workspaceId, sessionId, groupId }, signal)
         }
 
-        function showName(workspace, groupId, group) {
+        function showCreateGroup(workspace) {
           openDialog({
-            key: groupId ?? workspace.workspaceId,
-            title: group ? '重命名分组' : `新增分组 · ${workspaceLabel(workspace.title)}`,
-            input: { value: group?.name ?? '', maxLength: 80 },
+            key: workspace.workspaceId,
+            title: `新增分组 · ${workspaceLabel(workspace.title)}`,
+            input: { value: '', maxLength: 80 },
             submit: '保存',
-            save: (name, signal) => change(group ? {
-              action: 'rename', workspaceId: workspace.workspaceId, groupId, name,
-            } : { action: 'create', workspaceId: workspace.workspaceId, name }, signal),
+            save: (name, signal) => change({ action: 'create', workspaceId: workspace.workspaceId, name }, signal),
           })
         }
 
-        function showGroupMenu(workspace, groupId, group, count) {
-          openDialog({ key: `group:${groupId}`, title: group.name, actions: [
-            ['重命名分组', () => showName(workspace, groupId, group)],
-            ['删除分组', () => openDialog({
-              key: `delete:${groupId}`, title: `删除「${group.name}」？`,
-              description: `组内可见的 ${count} 条会话将移回「${workspaceLabel(workspace.title)}」。删除分组会保留全部会话。`,
-              submit: '仅删除分组',
-              danger: true,
-              save: async (_, signal) => {
-                await change({ action: 'delete', workspaceId: workspace.workspaceId, groupId }, signal)
-                viewFold(setCollapsedGroups, groupId, true)
-              },
-            })],
-          ] })
-        }
-
-        function adjustSessionGroup(workspaceId, session, groupId, groups) {
-          const choices = groups.filter(([id]) => id !== groupId).map(([id, group]) => [id, group.name])
-          if (groupId !== undefined) choices.push(['', '移出分组，返回工作区'])
-          openDialog({
-            key: `assign:${session.id}`, title: '调整分组',
-            ...(choices.length === 0 ? { description: '当前工作区暂无可选分组。' } : {
-              choices,
-              description: sessionLabel(session), submit: '确定',
-              save: async (id, signal) => {
-                await assign(workspaceId, session.id, id || null, signal)
-                if (id && !signal.aborted) viewFold(setCollapsedGroups, id, true)
-              },
-            }),
-          })
+        async function saveGroup(workspaceId, groupId, action, name, signal) {
+          if (action === 'rename') {
+            await change({ action, workspaceId, groupId, name }, signal)
+          } else {
+            await change({ action, workspaceId, groupId }, signal)
+            if (!signal.aborted) viewFold(setCollapsedGroups, groupId, true)
+          }
         }
 
         function createInGroup(workspaceId, groupId, retrySessionId) {
@@ -458,6 +554,11 @@ window.__ModuleLoader__.load({
           const target = session.blank ? undefined : {
             kind: 'session', value: { sessionId: session.id, displayTitle: session.title?.trim() ?? '' },
           }
+          const destinations = groups.filter(([id]) => id !== groupId).map(([id, group]) => ({ id, label: group.name }))
+          if (groupId !== undefined) {
+            if (destinations.length) destinations.push({ type: 'separator', id: 'ungroup-separator' })
+            destinations.push({ id: '', label: '移出分组，返回工作区' })
+          }
           return h('div', {
             key: session.id, className: 'dsh-chat-groups-row', 'data-session-id': session.id,
             'aria-current': session.id === active ? 'true' : undefined, ...getTriggerProps(target),
@@ -479,8 +580,15 @@ window.__ModuleLoader__.load({
                 usePinned: hooks.pinned && (selector => selector(useSource(hooks.pinned))),
               })),
             ),
-            iconButton(IconWorkspaceTreeOutlineRegular, `调整「${displayTitle}」的分组`,
-              () => adjustSessionGroup(workspaceId, session, groupId, groups), pending || data === null),
+            h(ActionMenu, {
+              Icon: IconWorkspaceTreeOutlineRegular, label: `调整「${displayTitle}」的分组`,
+              disabled: pending || data === null,
+              items: destinations.length ? destinations : [{ id: 'empty', label: '当前工作区暂无可选分组', disabled: true }],
+              onSelect: id => { void run(async signal => {
+                await assign(workspaceId, session.id, id || null, signal)
+                if (id && !signal.aborted) viewFold(setCollapsedGroups, id, true)
+              }) },
+            }),
           ))
         }
 
@@ -514,7 +622,7 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dsh-chat-groups-actions' },
                 h(NativeWorkspaceActions, { target, renderFactorySlot, useWorkspaceAccess, t }),
                 iconButton(IconProjectAddOutlineRegular, `在「${title}」中新增分组`,
-                  () => showName(workspace), pending || data === null),
+                  () => showCreateGroup(workspace), pending || data === null),
               ),
             ),
             expanded && h('div', { className: 'dsh-chat-groups-branch' },
@@ -531,8 +639,12 @@ window.__ModuleLoader__.load({
                       iconButton(retrySessionId ? RetryIcon : IconNewChatOutlineRegular,
                         retrySessionId ? `重试保存到${group.name}` : `在${group.name}新建会话`,
                         () => createInGroup(id, groupId, retrySessionId), pending),
-                      iconButton(IconEllipsisOutlineRegular, `${group.name}的操作`,
-                        () => showGroupMenu(workspace, groupId, group, rows.length), pending),
+                      h(GroupActions, {
+                        groupName: group.name,
+                        description: `组内可见的 ${rows.length} 条会话将移回「${title}」。删除分组会保留全部会话。`,
+                        disabled: pending, run, t,
+                        save: (action, name, signal) => saveGroup(id, groupId, action, name, signal),
+                      }),
                     ),
                   ),
                   open && h('div', { className: 'dsh-chat-groups-branch' }, rows.length
@@ -556,7 +668,7 @@ window.__ModuleLoader__.load({
           ),
           dialog && h(Dialog, { key: dialog.key, dialog, pending, error: dialogError, t,
             close: closeDialog,
-            submit: value => { if (dialog.save) void run(signal => dialog.save(value, signal), true) },
+            submit: value => { void run(signal => dialog.save(value, signal), { close: closeDialog, onError: setDialogError }) },
           }),
         )
       }
