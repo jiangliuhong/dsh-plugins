@@ -7,7 +7,7 @@ window.__ModuleLoader__.load({
     } = require('react')
     const { createPortal } = require('react-dom')
     const {
-      Button, Menu, MenuSurface, Modal, Tooltip, useDismissOnOutsidePointer,
+      Button, Menu, MenuSurface, Modal, StateDot, Tooltip, useDismissOnOutsidePointer,
       IconEditOutlineRegular, IconEllipsisOutlineRegular, IconFlatListOutlineRegular, IconTrashOutlineRegular,
       IconFolderCloseRegular, IconFolderOpenRegular,
       IconNewChatOutlineRegular, IconProjectAddOutlineRegular, IconWorkspaceTreeOutlineRegular,
@@ -49,12 +49,7 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-row > .dsh-chat-groups-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 5px; }
       .dsh-chat-groups-label > svg { flex: none; }
       .dsh-chat-groups-label > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .dsh-chat-groups-status-dot { box-sizing: border-box; flex: none; width: 8px; height: 8px; border-radius: 50%; }
-      .dsh-chat-groups-status-dot[data-state=warning] {
-        border-radius: 2px; background: var(--dsw-alias-state-warn-primary); transform: rotate(45deg) scale(.8);
-      }
-      .dsh-chat-groups-status-dot[data-state=ongoing] { border: 2px solid var(--dsw-alias-state-business-primary); }
-      .dsh-chat-groups-status-dot[data-state=done] { background: var(--dsw-alias-state-done-primary); }
+      .dsh-chat-groups-status { flex: none; width: 16px; height: 20px; display: inline-flex; align-items: center; justify-content: center; }
       .dsh-chat-groups-actions { flex: none; display: flex; align-items: center; gap: 5px; padding-inline-end: 3px; }
       .dsh-chat-groups-icon { flex: none; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; padding: 0; color: var(--dsw-alias-label-tertiary); }
       .dsh-chat-groups-icon svg { width: 14px; height: 14px; }
@@ -558,9 +553,7 @@ window.__ModuleLoader__.load({
             'aria-current': session.id === active ? 'true' : undefined, ...getTriggerProps(target),
           },
           button(h(Fragment, null,
-            h('span', {
-              className: 'dsh-chat-groups-status-dot', 'data-state': status?.state, 'aria-hidden': true,
-            }),
+            h('span', { className: 'dsh-chat-groups-status' }, status && h(StateDot, { state: status.state })),
             h('span', null, displayTitle),
           ), () => openSession(session.id), { title: titleWithStatus, 'aria-label': titleWithStatus }),
           h('span', { className: 'dsh-chat-groups-actions' },
