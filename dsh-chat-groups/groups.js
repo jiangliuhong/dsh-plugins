@@ -120,6 +120,23 @@ export function createGroupOperations({ read, write, workspace, available, archi
       })
     },
 
+    inheritForkGroup({ sourceSessionId, childSessionId }) {
+      return inOrder(async () => {
+        const state = read()
+        if (!Object.hasOwn(state.membership, sourceSessionId) || Object.hasOwn(state.membership, childSessionId)) {
+          return this.snapshot()
+        }
+        const groupId = state.membership[sourceSessionId]
+        if (!Object.hasOwn(state.groups, groupId)) return this.snapshot()
+        const { workspaceId } = state.groups[groupId]
+        if (!await available(childSessionId)) throw new GroupError('session-missing', '会话已不存在。')
+        requireMembership({ workspaceId, sessionId: sourceSessionId })
+        requireMembership({ workspaceId, sessionId: childSessionId })
+        await write(updateGroups(state, { action: 'assign', workspaceId, sessionId: childSessionId, groupId }))
+        return this.snapshot()
+      })
+    },
+
     createSession({ workspaceId, groupId, retrySessionId }) {
       return inOrder(async () => {
         let state = read()

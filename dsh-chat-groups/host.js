@@ -44,6 +44,11 @@ const invocations = [
   { method: 'snapshot', result: codec('Groups', stateSchema) },
   { method: 'change', request: codec('GroupRequest', requestSchema), result: codec('Groups', stateSchema) },
   {
+    method: 'inheritForkGroup',
+    request: codec('InheritForkGroupRequest', z.strictObject({ sourceSessionId: id, childSessionId: id })),
+    result: codec('Groups', stateSchema),
+  },
+  {
     method: 'createSession',
     request: codec('CreateSessionRequest', createSessionSchema),
     result: codec('CreatedSession', createdSessionSchema),
@@ -105,6 +110,10 @@ class ChatGroups extends Service {
 
   async change(request) {
     return this.run(() => this.operations.change(request))
+  }
+
+  async inheritForkGroup(request) {
+    return this.run(() => this.operations.inheritForkGroup(request))
   }
 
   async createSession(request) {

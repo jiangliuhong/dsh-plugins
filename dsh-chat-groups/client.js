@@ -283,6 +283,25 @@ window.__ModuleLoader__.load({
       error && h('div', { className: 'dsh-chat-groups-error', role: 'alert' }, error))
     }
 
+    // rc.5 resolves these service methods at call time. Preserve the native
+    // receiver and leave wrappers installed later by other plugins intact.
+    function wrapMethod(target, name, decorate) {
+      const previous = Object.getOwnPropertyDescriptor(target, name)
+      const original = target[name]
+      const decorated = decorate(original)
+      let active = true
+      function wrapped(...args) {
+        return Reflect.apply(active ? decorated : original, this, args)
+      }
+      Object.defineProperty(target, name, { configurable: true, writable: true, value: wrapped })
+      return () => {
+        active = false
+        if (Object.getOwnPropertyDescriptor(target, name)?.value !== wrapped) return
+        if (previous) Object.defineProperty(target, name, previous)
+        else delete target[name]
+      }
+    }
+
     function apply(ctx) {
       const sessions = ctx.get('sessions')
       const workspaces = ctx.get('workspaces')
@@ -292,6 +311,44 @@ window.__ModuleLoader__.load({
       let originWorkspace
       let nativeWorkspace
       let nativeSessionActions
+      const groupChanges = new EventTarget()
+      let groupChannel
+
+      function groupsChanged() {
+        groupChanges.dispatchEvent(new Event('change'))
+        groupChannel?.postMessage('change')
+      }
+
+      // Both workspace toolbars use the rc.5 workspace navigator. Restrict
+      // only the candidate list; the navigator still owns presets and drafts.
+      function ungroupedWorkspaceEntry(original) {
+        return async function (workspace, ...args) {
+          if (!workspace.sessionIds.length) return original.call(this, workspace, ...args)
+          let sessionIds = []
+          try {
+            const state = await rpc('snapshot', {})
+            const pending = new Set(Object.values(state.pendingSessions))
+            sessionIds = workspace.sessionIds.filter(id => !Object.hasOwn(state.membership, id) && !pending.has(id))
+          } catch {
+            // If membership is unavailable, opening a fresh blank preserves group drafts.
+          }
+          return original.call(this, { ...workspace, sessionIds }, ...args)
+        }
+      }
+
+      function observeFork(original) {
+        return function fork(options) {
+          return original.call(this, {
+            ...options,
+            onCreated(childSessionId) {
+              void rpc('inheritForkGroup', { request: { sourceSessionId: options.sessionId, childSessionId } })
+                .then(groupsChanged)
+                .catch(error => ctx.contextMenus.notify(`分支已创建，自动归组失败：${message(error)}`))
+              options.onCreated?.(childSessionId)
+            },
+          })
+        }
+      }
 
       async function rpc(method, args, signal) {
         const result = await connection.rpc.call('/api', `chatGroups/${method}`, { args }, signal)
@@ -380,6 +437,7 @@ window.__ModuleLoader__.load({
         const [pending, setPending] = useState(false)
         const operation = useRef(false)
         const revision = useRef(0)
+        const refreshPending = useRef(false)
         const lifetime = useRef(null)
         useEffect(() => {
           const controller = new AbortController()
@@ -390,7 +448,11 @@ window.__ModuleLoader__.load({
           if (generation === undefined) return
           const controller = new AbortController()
           async function refresh() {
-            if (operation.current) return
+            if (operation.current) {
+              refreshPending.current = true
+              return
+            }
+            refreshPending.current = false
             const version = ++revision.current
             try {
               const snapshot = await rpc('snapshot', {}, controller.signal)
@@ -404,7 +466,9 @@ window.__ModuleLoader__.load({
           }
           void refresh()
           window.addEventListener('focus', refresh)
+          groupChanges.addEventListener('change', refresh)
           return () => {
+            groupChanges.removeEventListener('change', refresh)
             controller.abort()
             window.removeEventListener('focus', refresh)
           }
@@ -474,7 +538,10 @@ window.__ModuleLoader__.load({
             if (!signal.aborted) onError(message(error))
           } finally {
             operation.current = false
-            if (!signal.aborted) setPending(false)
+            if (!signal.aborted) {
+              setPending(false)
+              if (refreshPending.current) groupChanges.dispatchEvent(new Event('change'))
+            }
           }
         }
 
@@ -700,10 +767,20 @@ window.__ModuleLoader__.load({
       }
 
       ctx.remoteAccess.whenAccess('chatGroups/snapshot', () => {
+        const restoreFork = wrapMethod(sessions, 'fork', observeFork)
+        const restoreWorkspaceEntry = wrapMethod(uiWorkspace, 'createInWorkspace', ungroupedWorkspaceEntry)
+        if (typeof BroadcastChannel === 'function') {
+          groupChannel = new BroadcastChannel('dsh-chat-groups')
+          groupChannel.onmessage = () => groupChanges.dispatchEvent(new Event('change'))
+        }
         const unregister = ctx.slots.inject(toolbarMount, () => ctx.slots.register({
           name: toolbarMount, id: 'chat-groups-workspace-toolbar',
         }, WorkspaceToolbarButton))
         return () => {
+          restoreWorkspaceEntry()
+          restoreFork()
+          groupChannel?.close()
+          groupChannel = undefined
           exit()
           unregister()
         }

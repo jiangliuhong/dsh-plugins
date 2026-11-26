@@ -55,6 +55,38 @@ const assign = (groupId, sessionId = 'first', workspaceId = 'one') => ({
   action: 'assign', workspaceId, sessionId, groupId,
 })
 
+test('fork inheritance observes queued source changes, persists once, and preserves manual assignments', async () => {
+  const { operations, reopen, workspaces, available, commits } = fixture()
+  workspaces.one.sessionIds.push('fork')
+  available.add('fork')
+  const request = { sourceSessionId: 'first', childSessionId: 'fork' }
+  const [, snapshot] = await Promise.all([
+    operations.change(assign('b')),
+    operations.inheritForkGroup(request),
+  ])
+  assert.deepEqual(snapshot.membership, { first: 'b', second: 'b', fork: 'b' })
+  assert.deepEqual(reopen().snapshot(), snapshot)
+  assert.deepEqual(await operations.inheritForkGroup(request), snapshot)
+  assert.equal(commits.length, 2)
+  const moved = await operations.change(assign('a', 'fork'))
+  assert.deepEqual(await operations.inheritForkGroup(request), moved)
+  assert.equal(commits.length, 3)
+})
+
+test('fork inheritance skips an ungrouped source and rejects a child outside its workspace', async () => {
+  const { operations, commits } = fixture()
+  const before = operations.snapshot()
+  await assert.rejects(operations.inheritForkGroup({ sourceSessionId: 'first', childSessionId: 'third' }), {
+    code: 'chat-groups/workspace-mismatch',
+  })
+  assert.deepEqual(operations.snapshot(), before)
+  await operations.change(assign(null, 'first'))
+  await operations.change(assign(null, 'second'))
+  const ungrouped = operations.snapshot()
+  assert.deepEqual(await operations.inheritForkGroup({ sourceSessionId: 'first', childSessionId: 'second' }), ungrouped)
+  assert.equal(commits.length, 2)
+})
+
 test('move and remove preserve one membership per session', async () => {
   const { operations } = fixture()
   assert.deepEqual((await operations.change(assign('b'))).membership, { first: 'b', second: 'b' })
