@@ -7,13 +7,15 @@ window.__ModuleLoader__.load({
     } = require('react')
     const { createPortal } = require('react-dom')
     const {
-      Button, Menu, MenuSurface, Modal, StateDot, Tooltip, useDismissOnOutsidePointer,
+      Button, HoverCard, HoverCardGroup, Menu, MenuSurface, Modal, StateDot, Tooltip, relativeTime, useDismissOnOutsidePointer,
       IconEditOutlineRegular, IconEllipsisOutlineRegular, IconFlatListOutlineRegular, IconTrashOutlineRegular,
       IconFolderCloseRegular, IconFolderOpenRegular,
       IconNewChatOutlineRegular, IconProjectAddOutlineRegular, IconWorkspaceTreeOutlineRegular,
     } = require('@deepseek-ai/dsh-client-ui-primitives')
     const slot = 'sidebar.workspaces'
     const sessionActionSlot = 'sidebar.workspaces.session.row.action'
+    const trailingSlot = 'chat-groups.session.row.trailing'
+    const hoverSlot = 'chat-groups.session.row.hover'
     const toolbarMount = 'shell.overlay'
     const workspaceHeader = '[data-sidebar-workspace-header]'
     const switchLabel = '切换到会话分组视图'
@@ -54,6 +56,19 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-icon { flex: none; display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; padding: 0; color: var(--dsw-alias-label-tertiary); }
       .dsh-chat-groups-icon svg { width: 14px; height: 14px; }
       .dsh-chat-groups-native-actions { display: contents; }
+      .dsh-chat-groups-row > .dsh-chat-groups-label > .dsh-chat-groups-trailing { flex: none; margin-left: auto; }
+      .dsh-chat-groups-trailing { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary); }
+      .dsh-chat-groups-trailing:empty { display: none; }
+      .dsh-chat-groups-hover { display: flex; flex-direction: column; gap: 8px; }
+      .dsh-chat-groups-hover-title { font-size: 14px; line-height: 20px; overflow-wrap: break-word; color: var(--dsw-alias-hovercard-label-primary); }
+      .dsh-chat-groups-hover-path, .dsh-chat-groups-hover-time { font-size: 12px; line-height: 16px; color: var(--dsw-alias-hovercard-label-secondary); }
+      .dsh-chat-groups-hover-path { word-break: break-all; }
+      .dsh-chat-groups-hover-status { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 20px; color: var(--dsw-alias-hovercard-label-tertiary); }
+      @media (hover: hover) {
+        .dsh-chat-groups-row:is(:hover, [data-session-menu-open]) .dsh-chat-groups-trailing,
+        html[data-input-modality='keyboard'] .dsh-chat-groups-row:focus-within .dsh-chat-groups-trailing { display: none; }
+        .dsh-chat-groups-row[data-session-menu-open] > .dsh-chat-groups-actions { display: flex; }
+      }
       .dsh-chat-groups-row[aria-current=true] { border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover, #8883); }
       .dsh-chat-groups-note { margin: 3px 8px; opacity: .8; overflow-wrap: anywhere; }
       @media (hover: hover) {
@@ -99,21 +114,47 @@ window.__ModuleLoader__.load({
       ['question', 'status.waitingAnswer'],
     ])
 
-    function sessionRowStatus(session, catalog, statuses, t) {
-      if (session.blank) return undefined
+    function sessionHoverPath(path, home) {
+      const windowsPath = /^(?:[A-Za-z]:[\\/]|\\\\)/
+      if (!home || windowsPath.test(home) || windowsPath.test(path)) return path
+      const root = home.replace(/\/+$/, '')
+      if (!root) return path
+      if (path.replace(/\/+$/, '') === root) return '~'
+      return path.startsWith(`${root}/`) ? `~${path.slice(root.length)}` : path
+    }
+
+    function sessionHoverTime(updatedAt, now, t) {
+      const { unit, n } = relativeTime(updatedAt, now)
+      return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
+    }
+
+    function sessionStatuses(session, catalog, statuses, t) {
       const status = statuses.get(session.id)
       const pending = pendingStatusLabel.get(status?.pendingInteraction?.kind)
-      if (pending !== undefined) return { state: 'warning', label: t(pending) }
-      if (status?.running ?? session.running) return { state: 'ongoing', label: t('status.running') }
-
       const children = catalog.projectionsBySession[session.id]?.values.subagentCatalog ?? []
       const runningChildren = children.filter(({ id }) => statuses.get(id)?.running ?? catalog.byId[id]?.running).length
-      if (runningChildren > 0) {
+      const result = []
+      if (pending !== undefined) result.push({ state: 'warning', label: t(pending) })
+      else if (status?.running ?? session.running) result.push({ state: 'ongoing', label: t('status.running') })
+      if (runningChildren) {
         const key = runningChildren === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other'
-        return { state: 'ongoing', label: t(key, { n: runningChildren }) }
+        result.push({ state: 'ongoing', label: t(key, { n: runningChildren }) })
       }
-      if (status?.completionUnread) return { state: 'done', label: t('status.completed') }
-      return undefined
+      if (result.length) return result
+      return status?.completionUnread
+        ? [{ state: 'done', label: t('status.completed') }]
+        : [{ state: 'idle', label: t('status.idle') }]
+    }
+
+    function SessionHoverContent({ session, displayTitle, home, now, states, renderSlot, t }) {
+      return h('div', { className: 'dsh-chat-groups-hover' },
+        h('div', { className: 'dsh-chat-groups-hover-title' }, displayTitle),
+        session.cwd && h('div', { className: 'dsh-chat-groups-hover-path' }, sessionHoverPath(session.cwd, home)),
+        !session.blank && h('div', { className: 'dsh-chat-groups-hover-time' }, sessionHoverTime(session.updatedAt, now, t)),
+        renderSlot(hoverSlot, { sessionId: session.id }),
+        states.map(({ state, label }) => h('div', { key: label, className: 'dsh-chat-groups-hover-status' },
+          h(StateDot, { state }), h('span', null, label))),
+      )
     }
 
     function useSource(source) {
@@ -136,8 +177,12 @@ window.__ModuleLoader__.load({
         }, h(Icon, { size: 14, 'aria-hidden': true })))
     }
 
-    function ActionMenu({ Icon, label, disabled, items, onSelect, panel, triggerRef, anchorName }) {
-      const [open, setOpen] = useState(false)
+    function ActionMenu({ Icon, label, disabled, items, onSelect, panel, triggerRef, anchorName, onOpenChange }) {
+      const [open, setMenuOpen] = useState(false)
+      function setOpen(next) {
+        setMenuOpen(next)
+        onOpenChange?.(next)
+      }
       return h(Menu, {
         open, items, portal: true, autoFocus: true, contextual: true,
         onClose: () => setOpen(false),
@@ -157,6 +202,27 @@ window.__ModuleLoader__.load({
           'aria-expanded': open || !!panel,
           'aria-controls': panel?.id,
         }),
+      })
+    }
+
+    function SessionCard({ session, displayTitle, states, home, now, renderSlot, t, menuOpen, rowProps, onOpen, nativeActions, groupAction }) {
+      const [groupMenuOpen, setGroupMenuOpen] = useState(false)
+      const primary = !session.blank && states[0].state !== 'idle' ? states[0] : undefined
+      const title = session.title?.trim() ?? ''
+      const anchor = h('div', { ...rowProps, 'data-session-menu-open': menuOpen || groupMenuOpen ? '' : undefined },
+        button(h(Fragment, null,
+          h('span', { className: 'dsh-chat-groups-status' }, primary && h(StateDot, { state: primary.state })),
+          h('span', null, displayTitle),
+          !session.blank && h('span', { className: 'dsh-chat-groups-trailing' },
+            renderSlot(trailingSlot, { sessionId: session.id })),
+        ), onOpen, { 'aria-label': primary ? `${displayTitle} · ${primary.label}` : displayTitle }),
+        h('span', { className: 'dsh-chat-groups-actions' }, nativeActions,
+          h(ActionMenu, { ...groupAction, onOpenChange: setGroupMenuOpen })),
+      )
+      return h(HoverCard, {
+        anchor, content: h(SessionHoverContent, { session, displayTitle, home, now, states, renderSlot, t }),
+        grouped: true, openDelayMs: 800, disabled: menuOpen || groupMenuOpen,
+        copyText: session.blank || !title ? undefined : title, copyLabel: t('copy'), copiedLabel: t('hover.copied'),
       })
     }
 
@@ -416,11 +482,14 @@ window.__ModuleLoader__.load({
 
       function GroupedSidebar({
         wide, expandSidebar, useSectionScroller, useContextMenu, useSessionAccess, useWorkspaceAccess,
-        renderFactorySlot, useSessionStatus, t,
+        renderFactorySlot, renderSlot, useSessionStatus, t,
       }) {
         const workspaceList = useSource(workspaces.list)
         const catalog = useSource(sessions.list)
         const statuses = useSessionStatus(snapshot => snapshot)
+        const { home } = useSource(nativeWorkspace.hooks.hostInfo)
+        const menuTarget = useSource(nativeWorkspace.hooks.contextMenuTarget)
+        const now = Date.now()
         const generation = useSource(connection.generation)
         const workspaceAction = useSource(nativeWorkspace.hooks.workspaceActionRequest)
         const { bindScrollerRef } = useSectionScroller()
@@ -605,8 +674,6 @@ window.__ModuleLoader__.load({
 
         function sessionRow(workspaceId, session, groupId, groups) {
           const displayTitle = sessionLabel(session)
-          const status = sessionRowStatus(session, catalog, statuses, t)
-          const titleWithStatus = status ? `${displayTitle} · ${status.label}` : displayTitle
           const target = session.blank ? undefined : {
             kind: 'session', value: { sessionId: session.id, displayTitle: session.title?.trim() ?? '' },
           }
@@ -615,16 +682,15 @@ window.__ModuleLoader__.load({
             if (destinations.length) destinations.push({ type: 'separator', id: 'ungroup-separator' })
             destinations.push({ id: '', label: '移出分组，返回工作区' })
           }
-          return h('div', {
-            key: session.id, className: 'dsh-chat-groups-row', 'data-session-id': session.id,
-            'aria-current': session.id === active ? 'true' : undefined, ...getTriggerProps(target),
-          },
-          button(h(Fragment, null,
-            h('span', { className: 'dsh-chat-groups-status' }, status && h(StateDot, { state: status.state })),
-            h('span', null, displayTitle),
-          ), () => openSession(session.id), { title: titleWithStatus, 'aria-label': titleWithStatus }),
-          h('span', { className: 'dsh-chat-groups-actions' },
-            target && h('span', { className: 'dsh-chat-groups-native-actions' },
+          return h(SessionCard, {
+            key: session.id, session, displayTitle, states: sessionStatuses(session, catalog, statuses, t), home, now, renderSlot, t,
+            menuOpen: menuTarget?.kind === 'session' && menuTarget.value.sessionId === session.id,
+            onOpen: () => openSession(session.id),
+            rowProps: {
+              className: 'dsh-chat-groups-row', 'data-session-id': session.id,
+              'aria-current': session.id === active ? 'true' : undefined, ...getTriggerProps(target),
+            },
+            nativeActions: target && h('span', { className: 'dsh-chat-groups-native-actions' },
               renderFactorySlot('contextMenu.button', {
                 target, label: t('actions.session.aria', { name: displayTitle }), className: 'dsh-chat-groups-icon',
               }),
@@ -634,7 +700,7 @@ window.__ModuleLoader__.load({
                 usePinned: hooks.pinned && (selector => selector(useSource(hooks.pinned))),
               })),
             ),
-            h(ActionMenu, {
+            groupAction: {
               Icon: IconWorkspaceTreeOutlineRegular, label: `调整「${displayTitle}」的分组`,
               disabled: pending || data === null,
               items: destinations.length ? destinations : [{ id: 'empty', label: '当前工作区暂无可选分组', disabled: true }],
@@ -642,8 +708,8 @@ window.__ModuleLoader__.load({
                 await assign(workspaceId, session.id, id || null, signal)
                 if (id && !signal.aborted) viewFold(setCollapsedGroups, id, true)
               }) },
-            }),
-          ))
+            },
+          })
         }
 
         function workspaceRows(workspace) {
@@ -729,7 +795,7 @@ window.__ModuleLoader__.load({
           wide && h('nav', { ref: bindScrollerRef, className: 'dsh-chat-groups-list', 'aria-label': '工作区与会话分组' },
             status && h('p', { className: 'dsh-chat-groups-note', role: 'status' }, status),
             data === null && !status && h('p', { className: 'dsh-chat-groups-note', role: 'status' }, '正在加载会话分组…'),
-            workspaceList.items.map(workspaceRows),
+            h(HoverCardGroup, null, workspaceList.items.map(workspaceRows)),
           ),
           dialog && h(Dialog, { key: dialog.key, dialog, pending, error: dialogError, t,
             close: closeDialog,
@@ -737,6 +803,37 @@ window.__ModuleLoader__.load({
           }),
         )
       }
+
+      // Child slots belong to their declaring sidebar. Mirror the active native
+      // decorations into our own slots so the renderer supplies their hooks and locale.
+      function mirrorRowSlot(source, destination) {
+        ctx.slots.inject(destination, () => {
+          const mounted = new Map()
+          function sync() {
+            const winners = new Set(ctx.slots.entriesOfSlot(source))
+            for (const [entry, dispose] of mounted) {
+              if (winners.has(entry)) continue
+              dispose()
+              mounted.delete(entry)
+            }
+            for (const entry of winners) {
+              if (mounted.has(entry)) continue
+              const { id, order } = entry.options
+              mounted.set(entry, ctx.slots.register({
+                name: destination, id, order, locale: entry.locale, inject: entry.inject, store: entry.store,
+              }, entry.component))
+            }
+          }
+          sync()
+          const unsubscribe = ctx.slots.subscribe(source, sync)
+          return () => {
+            unsubscribe()
+            for (const dispose of mounted.values()) dispose()
+          }
+        })
+      }
+      mirrorRowSlot('sidebar.session.row.trailing', trailingSlot)
+      mirrorRowSlot('sidebar.session.row.hover', hoverSlot)
 
       function enter() {
         if (stopView) return
@@ -757,7 +854,13 @@ window.__ModuleLoader__.load({
           })
         originWorkspace = workspace.workspaceId
         const withdraw = ctx.slots.inject(slot,
-          () => ctx.slots.register({ name: slot, locale: 'workspace', priority: -10 }, GroupedSidebar))
+          () => ctx.slots.register({
+            name: slot, locale: 'workspace', priority: -10,
+            children: {
+              [trailingSlot]: { kind: 'list', scope: 'root', inline: true },
+              [hoverSlot]: { kind: 'list', scope: 'root' },
+            },
+          }, GroupedSidebar))
         if (ctx.slots.entriesOfSlot(slot)[0]?.component === GroupedSidebar) {
           stopView = withdraw
         } else {

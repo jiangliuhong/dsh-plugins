@@ -30,7 +30,7 @@ function loadClient({ snapshot, selector, fork, inherit } = {}) {
   const ctx = {
     get: name => services[name],
     remoteAccess: { whenAccess(endpoint, cb) { assert.equal(endpoint, 'chatGroups/snapshot'); onAccess = cb } },
-    slots: { inject: (_slot, register) => register(), register: () => () => {} },
+    slots: { inject: (slot, register) => slot === 'shell.overlay' ? register() : () => {}, register: () => () => {} },
     contextMenus: { notify: text => notices.push(text) },
   }
   definition.apply(ctx)
