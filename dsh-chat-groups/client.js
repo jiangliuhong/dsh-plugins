@@ -3,19 +3,51 @@ window.__ModuleLoader__.load({
   id: 'dsh-chat-groups',
   factory(require) {
     const {
-      createElement: h, Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore,
+      createElement: h, Fragment, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
     } = require('react')
     const { createPortal } = require('react-dom')
     const {
       Button, HoverCard, HoverCardGroup, Menu, MenuSurface, Modal, StateDot, Tooltip, relativeTime, useDismissOnOutsidePointer,
       IconEditOutlineRegular, IconEllipsisOutlineRegular, IconFlatListOutlineRegular, IconTrashOutlineRegular,
-      IconFolderCloseRegular, IconFolderOpenRegular,
+      IconBranchOutlineRegular, IconFolderCloseRegular, IconFolderOpenRegular,
       IconNewChatOutlineRegular, IconProjectAddOutlineRegular, IconWorkspaceTreeOutlineRegular,
     } = require('@deepseek-ai/dsh-client-ui-primitives')
     const slot = 'sidebar.workspaces'
     const sessionActionSlot = 'sidebar.workspaces.session.row.action'
     const trailingSlot = 'chat-groups.session.row.trailing'
     const hoverSlot = 'chat-groups.session.row.hover'
+    const heroSlot = 'conversation.hero.options'
+    const recoverySlot = 'conversation.input.dock'
+    const worktreeLocale = 'chat-groups-worktrees'
+    const worktreeCopy = {
+      zh: {
+        choose: '选择已有工作树', label: '工作树', workspace: '工作区默认目录',
+        detached: '分离 HEAD · {commit}', switching: '正在切换工作树…', retry: '重新加载工作树',
+        forgeCancelled: '已取消新建工作树。请先切回工作区默认目录，再勾选「新建工作树」。',
+        recover: '重新选择工作树', resend: '工作目录已确认，请重新发送消息。',
+        forge: '请先取消「新建工作树」，再选择已有工作树。', unavailable: '当前无法切换工作树。',
+      },
+      en: {
+        choose: 'Select an existing worktree', label: 'Worktree', workspace: 'Workspace default directory',
+        detached: 'Detached HEAD · {commit}', switching: 'Switching worktree…', retry: 'Reload worktrees',
+        forgeCancelled: 'New worktree was cancelled. Switch to the workspace default directory before selecting New worktree.',
+        recover: 'Select a worktree again', resend: 'Working directory confirmed. Send your message again.',
+        forge: 'Clear New worktree before selecting an existing worktree.', unavailable: 'Worktree selection is currently unavailable.',
+      },
+    }
+    const absentSource = { subscribe: () => () => {}, getSnapshot: () => undefined }
+    const worktreeStyle = `
+      .dsh-chat-groups-worktree { display: inline-flex; align-items: center; gap: 4px;
+        max-width: min(22ch, 25vw); padding: 3px 5px; background: transparent; border: 0;
+        border-radius: var(--dsw-radius-sm); color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; }
+      [data-slot="conversation.hero.options"]:has(> style[data-existing-worktree]) [data-forge-worktree] { display: none; }
+      .dsh-chat-groups-worktree:hover { background: var(--dsw-alias-interactive-bg-hover); }
+      .dsh-chat-groups-worktree:focus-visible { outline: 2px solid var(--dsw-focus-ring-color); }
+      .dsh-chat-groups-worktree[aria-disabled=true] { opacity: .55; cursor: default; }
+      .dsh-chat-groups-worktree > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dsh-chat-groups-worktree-option { display: grid; gap: 2px; white-space: normal; overflow-wrap: anywhere; }
+      .dsh-chat-groups-worktree-option small { color: var(--dsw-alias-label-secondary); }
+    `
     const toolbarMount = 'shell.overlay'
     const workspaceHeader = '[data-sidebar-workspace-header]'
     const switchLabel = '切换到会话分组视图'
@@ -58,7 +90,10 @@ window.__ModuleLoader__.load({
       .dsh-chat-groups-native-actions { display: contents; }
       .dsh-chat-groups-row > .dsh-chat-groups-label > .dsh-chat-groups-trailing { flex: none; margin-left: auto; }
       .dsh-chat-groups-trailing { display: inline-flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary); }
-      .dsh-chat-groups-trailing:empty { display: none; }
+      .dsh-chat-groups-row-worktree { display: inline-flex; align-items: center; }
+      .dsh-chat-groups-trailing:has([data-forge-row-worktree]) .dsh-chat-groups-row-worktree { display: none; }
+      .dsh-chat-groups-row-time { flex: none; font-size: 10px; line-height: 16px; margin-inline-end: -1px; }
+      @media (hover: none) { .dsh-chat-groups-row-time:not([aria-hidden]) { display: none; } }
       .dsh-chat-groups-hover { display: flex; flex-direction: column; gap: 8px; }
       .dsh-chat-groups-hover-title { font-size: 14px; line-height: 20px; overflow-wrap: break-word; color: var(--dsw-alias-hovercard-label-primary); }
       .dsh-chat-groups-hover-path, .dsh-chat-groups-hover-time { font-size: 12px; line-height: 16px; color: var(--dsw-alias-hovercard-label-secondary); }
@@ -109,9 +144,9 @@ window.__ModuleLoader__.load({
     `
 
     const pendingStatusLabel = new Map([
-      ['approval', 'status.waitingApproval'],
-      ['plan-review', 'status.planReview'],
-      ['question', 'status.waitingAnswer'],
+      ['approval', ['status.waitingApproval', 'status.compact.approval']],
+      ['plan-review', ['status.planReview', 'status.compact.planReview']],
+      ['question', ['status.waitingAnswer', 'status.compact.answer']],
     ])
 
     function sessionHoverPath(path, home) {
@@ -123,9 +158,11 @@ window.__ModuleLoader__.load({
       return path.startsWith(`${root}/`) ? `~${path.slice(root.length)}` : path
     }
 
-    function sessionHoverTime(updatedAt, now, t) {
+    function sessionTime(updatedAt, now, t, { ago = false } = {}) {
       const { unit, n } = relativeTime(updatedAt, now)
-      return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
+      if (unit === 'now') return t('time.now')
+      const label = t(`time.${unit}`, { n })
+      return ago ? t('time.ago', { t: label }) : label
     }
 
     function sessionStatuses(session, catalog, statuses, t) {
@@ -134,7 +171,7 @@ window.__ModuleLoader__.load({
       const children = catalog.projectionsBySession[session.id]?.values.subagentCatalog ?? []
       const runningChildren = children.filter(({ id }) => statuses.get(id)?.running ?? catalog.byId[id]?.running).length
       const result = []
-      if (pending !== undefined) result.push({ state: 'warning', label: t(pending) })
+      if (pending !== undefined) result.push({ state: 'warning', label: t(pending[0]), trailingLabel: t(pending[1]) })
       else if (status?.running ?? session.running) result.push({ state: 'ongoing', label: t('status.running') })
       if (runningChildren) {
         const key = runningChildren === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other'
@@ -146,11 +183,12 @@ window.__ModuleLoader__.load({
         : [{ state: 'idle', label: t('status.idle') }]
     }
 
-    function SessionHoverContent({ session, displayTitle, home, now, states, renderSlot, t }) {
+    function SessionHoverContent({ session, worktreeRoot, displayTitle, home, now, states, renderSlot, t }) {
+      const directory = worktreeRoot ?? session.cwd
       return h('div', { className: 'dsh-chat-groups-hover' },
         h('div', { className: 'dsh-chat-groups-hover-title' }, displayTitle),
-        session.cwd && h('div', { className: 'dsh-chat-groups-hover-path' }, sessionHoverPath(session.cwd, home)),
-        !session.blank && h('div', { className: 'dsh-chat-groups-hover-time' }, sessionHoverTime(session.updatedAt, now, t)),
+        directory && h('div', { className: 'dsh-chat-groups-hover-path', title: directory }, sessionHoverPath(directory, home)),
+        !session.blank && h('div', { className: 'dsh-chat-groups-hover-time' }, sessionTime(session.updatedAt, now, t, { ago: true })),
         renderSlot(hoverSlot, { sessionId: session.id }),
         states.map(({ state, label }) => h('div', { key: label, className: 'dsh-chat-groups-hover-status' },
           h(StateDot, { state }), h('span', null, label))),
@@ -205,7 +243,11 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function SessionCard({ session, displayTitle, states, home, now, renderSlot, t, menuOpen, rowProps, onOpen, nativeActions, groupAction }) {
+    // The catalogue's cwd is the launch directory. The projection follows cd
+    // and existing-worktree selections, including cached historical sessions.
+    const rowDirectory = session => session.projectionValues?.workingDirectory ?? session.cwd
+
+    function SessionCard({ session, worktreeRoot, displayTitle, states, home, now, renderSlot, t, menuOpen, rowProps, onOpen, nativeActions, groupAction }) {
       const [groupMenuOpen, setGroupMenuOpen] = useState(false)
       const primary = !session.blank && states[0].state !== 'idle' ? states[0] : undefined
       const title = session.title?.trim() ?? ''
@@ -213,14 +255,18 @@ window.__ModuleLoader__.load({
         button(h(Fragment, null,
           h('span', { className: 'dsh-chat-groups-status' }, primary && h(StateDot, { state: primary.state })),
           h('span', null, displayTitle),
-          !session.blank && h('span', { className: 'dsh-chat-groups-trailing' },
-            renderSlot(trailingSlot, { sessionId: session.id })),
+          (!session.blank || worktreeRoot) && h('span', { className: 'dsh-chat-groups-trailing' },
+            !session.blank && h('span', { className: 'dsh-chat-groups-row-time', 'aria-hidden': primary?.trailingLabel ? true : undefined },
+              primary?.trailingLabel ?? sessionTime(session.updatedAt, now, t)),
+            !session.blank && renderSlot(trailingSlot, { sessionId: session.id }),
+            worktreeRoot && h('span', { className: 'dsh-chat-groups-row-worktree', role: 'img', 'aria-label': worktreeRoot, title: worktreeRoot },
+              h(IconBranchOutlineRegular, { size: 13, 'aria-hidden': true }))),
         ), onOpen, { 'aria-label': primary ? `${displayTitle} · ${primary.label}` : displayTitle }),
         h('span', { className: 'dsh-chat-groups-actions' }, nativeActions,
           h(ActionMenu, { ...groupAction, onOpenChange: setGroupMenuOpen })),
       )
       return h(HoverCard, {
-        anchor, content: h(SessionHoverContent, { session, displayTitle, home, now, states, renderSlot, t }),
+        anchor, content: h(SessionHoverContent, { session, worktreeRoot, displayTitle, home, now, states, renderSlot, t }),
         grouped: true, openDelayMs: 800, disabled: menuOpen || groupMenuOpen,
         copyText: session.blank || !title ? undefined : title, copyLabel: t('copy'), copiedLabel: t('hover.copied'),
       })
@@ -427,6 +473,166 @@ window.__ModuleLoader__.load({
         stopView = undefined
       }
 
+      const subscribeHero = listener => ctx.slots.subscribe(heroSlot, listener)
+      const currentForge = () => ctx.slots.entriesOfSlot(heroSlot).find(entry => entry.options.id === 'forge-panel.worktree')
+
+      function WorktreeOption(props) {
+        const workspace = props.useWorkspaces(list => list.items.find(workspace => workspace.sessionIds.includes(props.sessionId)))
+        const generation = useSource(connection.generation)
+        if (!workspace || !generation) return null
+        return h(WorktreeSelector, { ...props, generation, workspacePath: workspace.path, key: JSON.stringify([props.sessionId, workspace.workspaceId, generation.id]) })
+      }
+
+      function RecoveryOption(props) {
+        const idle = props.useLifecycle(session => session?.openState === 'open' && !session.blank && !session.running)
+        return idle ? h(WorktreeOption, { ...props, recoveryDock: true }) : null
+      }
+
+      function WorktreeSelector({ sessionId, generation, workspacePath, useDirectory, recoveryDock, t }) {
+        const directory = useDirectory(value => value)
+        const forge = useSyncExternalStore(subscribeHero, currentForge)
+        const panel = useMemo(() => recoveryDock ? absentSource : forge?.inject?.(sessionId)?.hooks?.panel ?? absentSource, [forge, sessionId, recoveryDock])
+        const forgeBlocked = useSyncExternalStore(
+          useCallback(listener => panel.subscribe(listener), [panel]),
+          useCallback(() => {
+            const worktree = panel.getSnapshot()?.state?.worktree
+            return !!(worktree?.request || worktree?.creation)
+          }, [panel]),
+        )
+        const [state, setState] = useState(null)
+        const [error, setError] = useState('')
+        const [open, setOpen] = useState(false)
+        const [pending, setPending] = useState(false)
+        const read = useRef(null)
+        const mutation = useRef(null)
+        // Forge's request and cancellation can arrive in one render batch. Observe the
+        // durable live event so the explanation also reaches windows that missed the toggle.
+        useEffect(() => {
+          if (recoveryDock) return
+          const events = sessions.binding(sessionId)?.eventSource
+          return events?.subscribe(() => {
+            if (!mutation.current && (!state || state.currentPath === state.defaultPath)) return
+            const { change } = events.getSnapshot()
+            if (change.kind === 'append' && change.entries.some(({ event }) =>
+              event.type === 'plugin:client-ui-forge/worktree' && event.data.action === 'cancel')) {
+              ctx.contextMenus.notify(t('forgeCancelled'))
+            }
+          })
+        }, [sessionId, recoveryDock, state?.currentPath, state?.defaultPath, t])
+        const active = useCallback(signal => !signal.aborted && connection.generation.getSnapshot() === generation, [generation])
+
+        const reload = useCallback(async () => {
+          if (connection.generation.getSnapshot() !== generation || mutation.current) return
+          read.current?.abort()
+          const controller = new AbortController()
+          read.current = controller
+          try {
+            const request = recoveryDock ? { sessionId, recoveryOnly: true } : { sessionId }
+            const snapshot = await rpc('listWorktrees', { request }, controller.signal)
+            if (active(controller.signal)) {
+              setState(snapshot)
+              setError('')
+            }
+          } catch (failure) {
+            if (active(controller.signal)) {
+              setState(null)
+              setError(message(failure))
+              setOpen(false)
+            }
+          }
+        }, [active, generation, sessionId, recoveryDock])
+
+        useEffect(() => {
+          if (forgeBlocked) setOpen(false)
+          void reload()
+          window.addEventListener('focus', reload)
+          return () => {
+            read.current?.abort()
+            window.removeEventListener('focus', reload)
+          }
+        }, [reload, directory, forgeBlocked])
+        useLayoutEffect(() => () => { read.current?.abort(); mutation.current?.abort() }, [])
+
+        const disabled = pending || forgeBlocked || state?.editable === false
+        async function select(path) {
+          setOpen(false)
+          if (!state || disabled || mutation.current || (path === state.currentPath && !state.recovering)) return
+          if (path !== state.defaultPath && !state.worktrees.some(item => item.path === path && item.selectable)) return
+          const controller = new AbortController()
+          mutation.current = controller
+          read.current?.abort()
+          setPending(true)
+          // Composer blocks are session-scoped but shared with other plugins. Only
+          // release our own block if another contributor has not replaced it.
+          const blocks = ctx.get('conversation').blocks
+          const block = { reason: t('switching') }
+          const store = blocks.storeFor(sessionId)
+          const hold = () => { if (store.getSnapshot() === undefined) blocks.set(sessionId, block) }
+          const unsubscribe = store.subscribe(hold)
+          hold()
+          const release = () => {
+            unsubscribe()
+            if (blocks.storeFor(sessionId).getSnapshot() === block) blocks.set(sessionId, undefined)
+          }
+          controller.signal.addEventListener('abort', release, { once: true })
+          try {
+            const snapshot = await rpc('applyWorktree', { request: { sessionId, path } }, controller.signal)
+            if (active(controller.signal)) {
+              setState(snapshot)
+              if (recoveryDock) ctx.contextMenus.notify(t('resend'))
+            }
+          } catch (failure) {
+            if (active(controller.signal)) ctx.contextMenus.notify(message(failure))
+          } finally {
+            controller.signal.removeEventListener('abort', release)
+            release()
+            mutation.current = null
+            if (active(controller.signal)) {
+              setPending(false)
+              void reload()
+            }
+          }
+        }
+
+        const currentPath = state?.currentPath ?? directory
+        const defaultPath = state?.defaultPath ?? workspacePath
+        const existing = !recoveryDock && currentPath && defaultPath && currentPath !== defaultPath
+        const styles = h('style', { 'data-existing-worktree': existing ? '' : undefined }, worktreeStyle)
+        if (!state) return error ? h(Fragment, null, styles,
+          h('button', { type: 'button', className: 'dsh-chat-groups-worktree', title: error,
+            'aria-label': `${t('retry')} · ${error}`, onClick: reload }, t('retry'))) : existing ? styles : null
+        if (recoveryDock && !state.recovering) return null
+        if (!state.recovering && state.currentPath === state.defaultPath && !state.worktrees.some(item => item.selectable && item.path !== state.defaultPath)) return null
+        const name = item => item.branch ?? t('detached', { commit: item.commit.slice(0, 8) })
+        const selected = state.worktrees.find(item => item.path === state.currentPath)
+        const defaultBranch = state.worktrees.find(item => item.path === state.defaultPath)
+        const option = (path, label, blockedReason) => ({
+          id: path, disabled: !!blockedReason, label: h('span', { className: 'dsh-chat-groups-worktree-option' },
+            h('span', null, label), h('small', null, path), blockedReason && h('small', null, blockedReason)),
+        })
+        const defaultLabel = defaultBranch ? `${t('workspace')} · ${name(defaultBranch)}` : t('workspace')
+        const items = [option(state.defaultPath, defaultLabel),
+          ...state.worktrees.filter(item => item.path !== state.defaultPath)
+            .map(item => option(item.path, name(item), item.selectable === false && (item.blockedReason || t('unavailable'))))]
+        const label = state.currentPath === state.defaultPath ? t('label') : selected ? name(selected) : state.currentPath
+        const currentLabel = state.currentPath === state.defaultPath ? defaultLabel : label
+        const disabledHint = pending ? t('switching') : forgeBlocked ? t('forge') : t('unavailable')
+        const hint = `${disabled ? disabledHint : t('choose')} · ${currentLabel} · ${state.currentPath}`
+        return h(Fragment, null, styles, h(Menu, {
+          open: open && !disabled, items, selectedId: state.currentPath, portal: true, autoFocus: true, side: 'bottom', align: 'end',
+          onClose: () => setOpen(false), onSelect: select,
+          anchor: h('button', {
+            className: 'dsh-chat-groups-worktree', type: 'button', 'aria-disabled': disabled, title: hint,
+            'aria-label': hint, 'aria-busy': pending, 'aria-haspopup': 'menu', 'aria-expanded': open && !disabled,
+            onClick() {
+              if (disabled) return ctx.contextMenus.notify(disabledHint)
+              if (!open) void reload()
+              setOpen(!open)
+            },
+          }, h('span', null, pending ? t('switching') : state.recovering ? t('recover') : label), h('small', { 'aria-hidden': true }, '▾')),
+        }))
+      }
+
       function WorkspaceToolbarButton() {
         const { items } = useSource(workspaces.list)
         const [container, setContainer] = useState(null)
@@ -548,6 +754,41 @@ window.__ModuleLoader__.load({
         const archived = new Set(workspaceList.archivedSessionIds)
         const groupBySession = data?.membership ?? {}
         const shown = new Set()
+        const visibleDirectories = new Set()
+        for (const workspace of workspaceList.items) {
+          if (!wide || collapsedWorkspaces.has(workspace.workspaceId)) continue
+          for (const id of workspace.sessionIds) {
+            const session = catalog.byId[id]
+            if (!session || archived.has(id) || session.origin === 'subagent' || (session.blank && id !== active)
+                || collapsedGroups.has(groupBySession[id]) || session.projectionValues?.forgeWorktree) continue
+            const directory = rowDirectory(session)
+            if (directory) visibleDirectories.add(directory)
+          }
+        }
+        // Session status updates are frequent. Key lookups by the unique paths
+        // on screen so a status change or a shared checkout costs no extra RPC.
+        const directoryKey = JSON.stringify([...visibleDirectories].sort())
+        const [linkedRoots, setLinkedRoots] = useState({})
+        useEffect(() => {
+          const paths = JSON.parse(directoryKey)
+          const controller = new AbortController()
+          let revision = 0
+          async function refresh() {
+            const current = ++revision
+            const roots = {}
+            for (let i = 0; i < paths.length; i += 512) {
+              const request = { paths: paths.slice(i, i + 512) }
+              try {
+                Object.assign(roots, await rpc('linkedWorktreeRoots', { request }, controller.signal))
+              } catch { return }
+              if (controller.signal.aborted || current !== revision) return
+            }
+            setLinkedRoots(roots)
+          }
+          if (generation !== undefined) void refresh()
+          if (generation !== undefined && paths.length) window.addEventListener('focus', refresh)
+          return () => { controller.abort(); window.removeEventListener('focus', refresh) }
+        }, [generation, directoryKey])
         const allGroups = Object.entries(data?.groups ?? {})
         const groupsByWorkspace = new Map()
         for (const entry of allGroups) {
@@ -683,6 +924,7 @@ window.__ModuleLoader__.load({
             destinations.push({ id: '', label: '移出分组，返回工作区' })
           }
           return h(SessionCard, {
+            worktreeRoot: session.projectionValues?.forgeWorktree?.path ?? linkedRoots[rowDirectory(session)],
             key: session.id, session, displayTitle, states: sessionStatuses(session, catalog, statuses, t), home, now, renderSlot, t,
             menuOpen: menuTarget?.kind === 'session' && menuTarget.value.sessionId === session.id,
             onOpen: () => openSession(session.id),
@@ -876,6 +1118,28 @@ window.__ModuleLoader__.load({
           groupChannel = new BroadcastChannel('dsh-chat-groups')
           groupChannel.onmessage = () => groupChanges.dispatchEvent(new Event('change'))
         }
+        const unregisterWorktrees = ctx.slots.inject(heroSlot, () => {
+          const releaseLocale = ctx.locale.register(worktreeLocale, worktreeCopy)
+          const inject = sessionId => {
+            const binding = sessions.binding(sessionId)
+            return { sessionId, hooks: {
+              workspaces: workspaces.list,
+              directory: binding?.session.projections.faceOf('workingDirectory') ?? absentSource,
+            } }
+          }
+          const releaseEntry = ctx.slots.register({
+            name: heroSlot, id: 'chat-groups.existing-worktree', order: -5, locale: worktreeLocale, inject,
+          }, WorktreeOption)
+          const releaseRecovery = ctx.slots.inject(recoverySlot, () => ctx.slots.register({
+            name: recoverySlot, id: 'chat-groups.recover-worktree', locale: worktreeLocale,
+            inject: sessionId => {
+              const face = inject(sessionId)
+              face.hooks.lifecycle = sessions.binding(sessionId)?.session ?? absentSource
+              return face
+            },
+          }, RecoveryOption))
+          return () => { releaseRecovery(); releaseEntry(); releaseLocale() }
+        })
         const unregister = ctx.slots.inject(toolbarMount, () => ctx.slots.register({
           name: toolbarMount, id: 'chat-groups-workspace-toolbar',
         }, WorkspaceToolbarButton))
@@ -885,6 +1149,7 @@ window.__ModuleLoader__.load({
           groupChannel?.close()
           groupChannel = undefined
           exit()
+          unregisterWorktrees()
           unregister()
         }
       })
@@ -892,7 +1157,7 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'dsh-chat-groups',
-      inject: ['contextMenus', 'slots', 'sessions', 'workspaces', 'connection', 'uiWorkspace', 'remoteAccess'],
+      inject: ['contextMenus', 'slots', 'sessions', 'workspaces', 'connection', 'uiWorkspace', 'remoteAccess', 'locale', 'conversation'],
       apply,
     }
   },

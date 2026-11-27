@@ -17,6 +17,8 @@
   "files": [
     "host.js",
     "groups.js",
+    "existing-worktrees.js",
+    "worktree-guard.js",
     "client.js",
     "cordis.patch.yml"
   ],
@@ -40,6 +42,7 @@
         "@deepseek-ai/dsh-api-workspace-controller",
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-renderer",
         "@deepseek-ai/dsh-client-ui-workspace"
       ],

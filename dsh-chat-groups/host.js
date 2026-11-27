@@ -4,7 +4,21 @@ import { RemoteError, bindTypertRemote, remoteErrorOf } from '@deepseek-ai/dsh-t
 import { z } from 'zod'
 import { createGroupOperations, emptyGroups, GroupError } from './groups.js'
 
+import { existingWorktrees, linkedWorktreeRoots, validateSelection } from './existing-worktrees.js'
+import { createWorktreeGuard } from './worktree-guard.js'
+
 const id = z.string().min(1).max(256)
+const directoryPath = z.string().min(1).refine(value => !value.includes('\0'))
+const worktreeStateSchema = z.object({
+  currentPath: directoryPath,
+  defaultPath: directoryPath,
+  editable: z.boolean(),
+  recovering: z.boolean(),
+  worktrees: z.array(z.object({
+    path: directoryPath, branch: z.string().nullable(), commit: z.string(),
+    selectable: z.boolean(), blockedReason: z.string().nullable(),
+  })),
+})
 const nameSchema = z.string().trim().min(1).max(80)
 const stateSchema = z.object({
   groups: z.record(z.uuid(), z.object({
@@ -29,8 +43,12 @@ const createSessionSchema = z.strictObject({
 const createdSessionSchema = z.object({ state: stateSchema, sessionId: id })
 const domainSpec = defineDomain({
   name: 'chat_groups',
-  version: 1,
-  tables: { state: domainTable(stateSchema) },
+  version: 2,
+  compatibleVersions: [1],
+  tables: {
+    state: domainTable(stateSchema),
+    worktrees: domainTable(z.object({ path: directoryPath.nullable(), failed: z.boolean().optional() })),
+  },
 })
 
 const packageName = 'dsh-chat-groups'
@@ -42,6 +60,21 @@ const codec = (type, schema) => ({
 })
 const invocations = [
   { method: 'snapshot', result: codec('Groups', stateSchema) },
+  {
+    method: 'linkedWorktreeRoots',
+    request: codec('LinkedWorktreeRootsRequest', z.strictObject({ paths: z.array(directoryPath.max(32768)).max(512) })),
+    result: codec('LinkedWorktreeRoots', z.record(directoryPath, directoryPath)),
+  },
+  {
+    method: 'listWorktrees',
+    request: codec('ListWorktreesRequest', z.strictObject({ sessionId: id, recoveryOnly: z.boolean().optional() })),
+    result: codec('OptionalWorktreeState', worktreeStateSchema.nullable()),
+  },
+  {
+    method: 'applyWorktree',
+    request: codec('ApplyWorktreeRequest', z.strictObject({ sessionId: id, path: directoryPath })),
+    result: codec('WorktreeState', worktreeStateSchema),
+  },
   { method: 'change', request: codec('GroupRequest', requestSchema), result: codec('Groups', stateSchema) },
   {
     method: 'inheritForkGroup',
@@ -71,12 +104,23 @@ const invocations = [
 export const name = packageName
 export const inject = [
   'typert', 'remoteAccess', 'storageDomain', 'workspaceRegistry', 'sessionPersistence', 'sessions', 'sessionController',
+  'agents', 'sessionProjections', 'workingDirectory', 'fs', 'subprocess', 'sandbox', 'sandboxPolicy',
 ]
 
 class ChatGroups extends Service {
-  constructor(ctx, table) {
+  constructor(ctx, table, worktrees) {
     super(ctx, serviceKey)
     this.typertRemote = bindTypertRemote(this, serviceKey)
+    const setSelection = (sessionId, path, failed = false) => path === null && !failed
+      ? worktrees.delete(sessionId)
+      : worktrees.put(sessionId, { path, failed })
+    this.worktreeGuard = createWorktreeGuard(ctx, {
+      getSelection: sessionId => worktrees.get(sessionId)?.path ?? null,
+      getRecovery: sessionId => worktrees.get(sessionId)?.failed === true,
+      setRecovery: (sessionId, failed) => setSelection(sessionId, worktrees.get(sessionId)?.path ?? null, failed),
+      setSelection,
+      validateSelection: (agent, path, signal) => validateSelection(ctx, agent, path, signal),
+    })
     this.operations = createGroupOperations({
       read: () => table.get('groups') ?? emptyGroups(),
       write: state => table.put('groups', state),
@@ -116,6 +160,18 @@ class ChatGroups extends Service {
     return this.run(() => this.operations.inheritForkGroup(request))
   }
 
+  async linkedWorktreeRoots({ paths }) {
+    return this.run(() => linkedWorktreeRoots(this.ctx, paths))
+  }
+
+  async listWorktrees(request) {
+    return this.run(() => existingWorktrees(this.ctx, { sessionId: request.sessionId, recoveryOnly: request.recoveryOnly }, this.worktreeGuard))
+  }
+
+  async applyWorktree(request) {
+    return this.run(() => existingWorktrees(this.ctx, request, this.worktreeGuard))
+  }
+
   async createSession(request) {
     return this.run(() => this.operations.createSession(request))
   }
@@ -135,7 +191,7 @@ export function apply(ctx) {
   ctx.effect(async () => {
     const domain = await ctx.storageDomain.open(domainSpec)
     try {
-      new ChatGroups(ctx, domain.table('state'))
+      new ChatGroups(ctx, domain.table('state'), domain.table('worktrees'))
       const unregister = ctx.typert.register({
         package: packageName,
         face: 'host',

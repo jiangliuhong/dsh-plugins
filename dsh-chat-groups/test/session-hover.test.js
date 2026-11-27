@@ -28,7 +28,7 @@ function fixture() {
   } } }
   const start = '    function apply(ctx) {'
   assert.ok(client.includes(start))
-  runInNewContext(client.replace(start, `    Object.assign(scope, { SessionHoverContent, sessionStatuses, SessionCard })\n${start}`), { window, scope })
+  runInNewContext(client.replace(start, `    Object.assign(scope, { SessionHoverContent, sessionStatuses, SessionCard, rowDirectory })\n${start}`), { window, scope })
   const t = (key, args) => args?.t ? `${key}(${args.t})` : args?.n ? `${key}:${args.n}` : key
   const props = {
     session: { id: 's', title: 'Title', cwd: '/Users/me/project', updatedAt: 10, blank: false },
@@ -55,7 +55,8 @@ test('native hover delay and copy, trailing slot and menu suppression coexist wi
   assert.equal(anchor.children[0].props.title, undefined)
   const openButton = anchor.children[0]
   const trailing = openButton.children[0].children.at(-1)
-  assert.equal(trailing.children[0].type, 'chat-groups.session.row.trailing')
+  assert.equal(text(trailing.children[0]), 'time.min:5')
+  assert.equal(trailing.children[1].type, 'chat-groups.session.row.trailing')
   openButton.props.onClick()
   assert.equal(opens, 1)
   assert.deepEqual(slotCalls, [['chat-groups.session.row.trailing', 's']])
@@ -70,6 +71,25 @@ test('native hover delay and copy, trailing slot and menu suppression coexist wi
   assert.equal(slotCalls.length, 0)
 })
 
+test('grouped rows follow the effective checkout and show its branch icon for existing and blank sessions', () => {
+  const { SessionCard, rowDirectory, props } = fixture()
+  const linked = '/repo-linked'
+  const session = { ...props.session, projectionValues: { workingDirectory: linked } }
+  assert.equal(rowDirectory(session), linked)
+  assert.equal(rowDirectory(props.session), props.session.cwd)
+  for (const blank of [true, false]) {
+    const row = SessionCard({ ...props, session: { ...session, blank }, worktreeRoot: linked })
+    const trailing = row.props.anchor.children[0].children[0].children.at(-1)
+    const icon = trailing.children.find(child => child?.props?.role === 'img')
+    const hover = row.props.content.type(row.props.content.props)
+    assert.equal(text(hover.children[1]), linked)
+    assert.equal(icon.props.title, linked)
+    assert.equal(icon.children[0].props.size, 13)
+  }
+  const normal = SessionCard(props).props.anchor.children[0].children[0].children.at(-1)
+  assert.ok(!normal.children.some(child => child?.props?.role === 'img'))
+})
+
 function text(node) {
   if (typeof node === 'string') return node
   return node?.children?.map(text).join('') ?? ''
@@ -80,6 +100,7 @@ test('session hover matches native title, POSIX path, relative time, extension a
   const statuses = new Map([['s', { pendingInteraction: { kind: 'approval' }, running: true, completionUnread: true }]])
   const catalog = { byId: { child: { running: true } }, projectionsBySession: { s: { values: { subagentCatalog: [{ id: 'child' }] } } } }
   const states = sessionStatuses(props.session, catalog, statuses, props.t)
+  assert.equal(states[0].trailingLabel, 'status.compact.approval')
   const content = SessionHoverContent({ ...props, states })
   assert.deepEqual(content.children.map(text), ['Title', '~/project', 'time.ago(time.min:5)', '', 'status.waitingApproval', 'status.subagentsRunning.one:1'])
   assert.equal(content.children[3].type, 'chat-groups.session.row.hover')
